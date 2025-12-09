@@ -2,6 +2,18 @@
 
 Ein plattformübergreifendes Analysewerkzeug für Windows und macOS zur statistischen Auswertung von Teilenummern aus DMS Loco-Soft Textdateien.
 
+## 💾 Download
+
+### Windows (keine Python-Installation erforderlich!)
+
+**[⬇️ Teilenummer-Analyse.exe herunterladen](https://github.com/SHP-ART/AnalyseSystem/raw/master/dist/Teilenummer-Analyse.exe)** (ca. 41 MB)
+
+Die EXE-Datei ist eigenständig und läuft auf jedem Windows-PC ohne zusätzliche Installation.
+
+### macOS / Linux / Python-Version
+
+Siehe Installationsanleitung unten für die Python-basierte Version.
+
 ## Features
 
 - 📊 **Statistische Analyse** - Zählt die Häufigkeit jeder Teilenummer
@@ -9,12 +21,21 @@ Ein plattformübergreifendes Analysewerkzeug für Windows und macOS zur statisti
 - 📈 **Mehrere Sortieroptionen** - Nach Vorgängen, Menge oder Umsatz
 - 🔍 **Suchfunktion** - Schnelles Finden von Teilenummern oder Kunden
 - 💾 **CSV-Export** - Exportiert Ergebnisse für Excel
+- 📈 **Grafische Auswertungen** - Visualisierung mit Matplotlib
 - 🖥️ **Plattformübergreifend** - Läuft auf Windows und macOS
+- 🗄️ **SQLite-Unterstützung** - Für sehr große Datenmengen
 
-## Voraussetzungen
+## Schnellstart (Windows EXE)
+
+1. **[Teilenummer-Analyse.exe herunterladen](https://github.com/SHP-ART/AnalyseSystem/raw/master/dist/Teilenummer-Analyse.exe)**
+2. **Doppelklick auf die heruntergeladene Datei**
+3. **Fertig!** - Keine Installation, kein Python erforderlich
+
+## Voraussetzungen (nur für Python-Version)
 
 - Python 3.8 oder höher
 - tkinter (in den meisten Python-Installationen enthalten)
+- matplotlib (für Grafiken)
 
 ## Installation
 
@@ -94,6 +115,37 @@ Der CSV-Export enthält:
 - Anzahl verschiedener Kunden
 
 Die CSV-Datei verwendet Semikolon als Trennzeichen und ist direkt in Excel importierbar.
+
+## Selbst eine EXE erstellen (für Entwickler)
+
+### Windows
+
+```powershell
+# Methode 1: PowerShell-Skript
+.\build.ps1
+
+# Methode 2: Batch-Skript
+.\build_windows.bat
+
+# Methode 3: Manuell
+python -m pip install pyinstaller matplotlib
+python -m PyInstaller --onefile --windowed --name "Teilenummer-Analyse" teilenummer_analyse.py
+```
+
+Die fertige EXE befindet sich dann im `dist\`-Ordner.
+
+### macOS
+
+```bash
+./build_macos.sh
+```
+
+## Technische Details
+
+- **Python Version**: 3.14.2
+- **Hauptbibliotheken**: tkinter, matplotlib, sqlite3
+- **Build-Tool**: PyInstaller 6.17.0
+- **Dateigröße (EXE)**: ~41 MB (enthält Python + alle Bibliotheken)
 
 ## Lizenz
 
