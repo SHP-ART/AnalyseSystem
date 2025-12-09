@@ -8,7 +8,7 @@ echo ========================================
 echo.
 
 REM Prüfe ob Python installiert ist
-python --version >nul 2>&1
+where python >nul 2>&1
 if errorlevel 1 (
     echo FEHLER: Python ist nicht installiert oder nicht im PATH.
     echo Bitte installiere Python von https://python.org
@@ -16,16 +16,25 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Python gefunden: 
+python --version
+echo.
+
 REM Installiere PyInstaller falls nicht vorhanden
-echo Installiere/Aktualisiere PyInstaller...
-pip install pyinstaller --upgrade
+echo Installiere/Aktualisiere PyInstaller und Abhängigkeiten...
+python -m pip install --upgrade pip
+python -m pip install pyinstaller matplotlib --upgrade
 
 echo.
 echo Erstelle ausführbare Datei...
 echo.
 
-REM Erstelle die .exe
-pyinstaller --onefile --windowed --name "Teilenummer-Analyse" teilenummer_analyse.py
+REM Erstelle die .exe mit Icon-Unterstützung (falls icon.ico vorhanden)
+if exist icon.ico (
+    python -m PyInstaller --onefile --windowed --name "Teilenummer-Analyse" --icon=icon.ico teilenummer_analyse.py
+) else (
+    python -m PyInstaller --onefile --windowed --name "Teilenummer-Analyse" teilenummer_analyse.py
+)
 
 echo.
 echo ========================================
