@@ -1071,13 +1071,30 @@ class AnalyseApp(tk.Tk):
         self.meta_label.config(text=meta_text)
 
     def _refresh_after_load(self):
-        self._update_time_filter_options()
-        self._apply_filter()
-        self._update_top_list()
-        # Lagerhaltung wird manuell über Tab aktualisiert
-        self._update_time_analysis()
-        self._update_summary()
-        # Chart wird erst bei Bedarf geladen
+        try:
+            self._update_time_filter_options()
+        except Exception as e:
+            print(f"Fehler in _update_time_filter_options: {e}")
+        
+        try:
+            self._apply_filter()
+        except Exception as e:
+            print(f"Fehler in _apply_filter: {e}")
+        
+        try:
+            self._update_top_list()
+        except Exception as e:
+            print(f"Fehler in _update_top_list: {e}")
+        
+        try:
+            self._update_time_analysis()
+        except Exception as e:
+            print(f"Fehler in _update_time_analysis: {e}")
+        
+        try:
+            self._update_summary()
+        except Exception as e:
+            print(f"Fehler in _update_summary: {e}")
 
     # --- Filter -----------------------------------------------------------
     def _update_time_filter_options(self):
