@@ -517,6 +517,138 @@ class TeilenummerStatistik:
             'total_revenue': total_rev,
         }
 
+    def get_lagerhaltung_analyse(self, max_tage_lohnend=60):
+        """
+        Analysiert welche Teile sich lohnen im Lager zu halten.
+        
+        Kategorien:
+        - "Lohnend": Verkauf alle 1-2 Monate (≤60 Tage zwischen Verkäufen)
+        - "Grenzwertig": Verkauf alle 2-4 Monate (61-120 Tage)
+        - "Nicht lohnend": Verkauf seltener als alle 4 Monate (>120 Tage)
+        """
+        if self.db_store:
+            return self._get_lagerhaltung_from_db(max_tage_lohnend)
+        
+        # Sammle alle Verkaufsdaten pro Teilenummer
+        teil_verkäufe = defaultdict(list)
+        for record in self.data:
+            iso = record.get('abgabe_iso')
+            if iso:
+                teil_verkäufe[record['teilenummer']].append({
+                    'datum': iso,
+                    'bezeichnung': record['bezeichnung'],
+                    'menge': record['menge'],
+                    'umsatz': record['vk_preis'],
+                })
+        
+        ergebnis = []
+        for teilenummer, verkäufe in teil_verkäufe.items():
+            if len(verkäufe) < 2:
+                # Nur ein Verkauf - kann Frequenz nicht berechnen
+                avg_tage = 999
+            else:
+                # Sortiere nach Datum und berechne Durchschnitt der Abstände
+                sorted_dates = sorted([v['datum'] for v in verkäufe])
+                abstände = []
+                for i in range(1, len(sorted_dates)):
+                    d1 = datetime.strptime(sorted_dates[i-1], '%Y-%m-%d')
+                    d2 = datetime.strptime(sorted_dates[i], '%Y-%m-%d')
+                    abstände.append((d2 - d1).days)
+                avg_tage = sum(abstände) / len(abstände) if abstände else 999
+            
+            # Kategorisierung
+            if avg_tage <= 60:
+                kategorie = "✅ Lohnend"
+                empfehlung = "Im Lager halten"
+            elif avg_tage <= 120:
+                kategorie = "⚠️ Grenzwertig"
+                empfehlung = "Bestand reduzieren"
+            else:
+                kategorie = "❌ Nicht lohnend"
+                empfehlung = "Nicht bevorraten"
+            
+            gesamtmenge = sum(v['menge'] for v in verkäufe)
+            gesamtumsatz = sum(v['umsatz'] for v in verkäufe)
+            
+            ergebnis.append({
+                'teilenummer': teilenummer,
+                'bezeichnung': verkäufe[0]['bezeichnung'],
+                'anzahl_verkäufe': len(verkäufe),
+                'durchschnitt_tage': avg_tage if avg_tage < 999 else None,
+                'gesamtmenge': gesamtmenge,
+                'gesamtumsatz': gesamtumsatz,
+                'kategorie': kategorie,
+                'empfehlung': empfehlung,
+            })
+        
+        return sorted(ergebnis, key=lambda x: x['durchschnitt_tage'] or 9999)
+
+    def _get_lagerhaltung_from_db(self, max_tage_lohnend=60):
+        """SQLite-Version der Lagerhaltungsanalyse."""
+        query = """
+            WITH verkauf_daten AS (
+                SELECT 
+                    teilenummer,
+                    MAX(bezeichnung) AS bezeichnung,
+                    abgabe_iso,
+                    SUM(menge) AS menge,
+                    SUM(vk_preis) AS umsatz,
+                    COUNT(*) AS anzahl
+                FROM records
+                WHERE abgabe_iso IS NOT NULL
+                GROUP BY teilenummer, abgabe_iso
+            ),
+            teil_stats AS (
+                SELECT 
+                    teilenummer,
+                    MAX(bezeichnung) AS bezeichnung,
+                    COUNT(DISTINCT abgabe_iso) AS anzahl_verkaufstage,
+                    SUM(menge) AS gesamtmenge,
+                    SUM(umsatz) AS gesamtumsatz,
+                    MIN(abgabe_iso) AS erster_verkauf,
+                    MAX(abgabe_iso) AS letzter_verkauf
+                FROM verkauf_daten
+                GROUP BY teilenummer
+            )
+            SELECT 
+                teilenummer,
+                bezeichnung,
+                anzahl_verkaufstage,
+                gesamtmenge,
+                gesamtumsatz,
+                CASE 
+                    WHEN anzahl_verkaufstage < 2 THEN NULL
+                    ELSE CAST(julianday(letzter_verkauf) - julianday(erster_verkauf) AS INTEGER) / (anzahl_verkaufstage - 1)
+                END AS durchschnitt_tage
+            FROM teil_stats
+            ORDER BY durchschnitt_tage NULLS LAST
+        """
+        cur = self.db_store.conn.execute(query)
+        ergebnis = []
+        for row in cur.fetchall():
+            avg_tage = row[5]
+            if avg_tage is None or avg_tage > 120:
+                kategorie = "❌ Nicht lohnend"
+                empfehlung = "Nicht bevorraten"
+            elif avg_tage <= 60:
+                kategorie = "✅ Lohnend"
+                empfehlung = "Im Lager halten"
+            else:
+                kategorie = "⚠️ Grenzwertig"
+                empfehlung = "Bestand reduzieren"
+            
+            ergebnis.append({
+                'teilenummer': row[0],
+                'bezeichnung': row[1],
+                'anzahl_verkäufe': row[2],
+                'durchschnitt_tage': avg_tage,
+                'gesamtmenge': row[3],
+                'gesamtumsatz': row[4],
+                'kategorie': kategorie,
+                'empfehlung': empfehlung,
+            })
+        return ergebnis
+
 
 # -----------------------------------------------------------------------------
 # GUI
@@ -601,6 +733,7 @@ class AnalyseApp(tk.Tk):
         self.notebook.grid(row=3, column=0, sticky='nsew')
 
         self._build_top_tab()
+        self._build_lagerhaltung_tab()
         self._build_chart_tab()
         self._build_time_tab()
         self._build_all_data_tab()
@@ -649,6 +782,72 @@ class AnalyseApp(tk.Tk):
         ttk.Scrollbar(frame, orient='vertical', command=self.top_tree.yview).grid(row=1, column=1, sticky='ns')
         self.top_tree.configure(yscrollcommand=lambda *args: None)
         frame.rowconfigure(1, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+    def _build_lagerhaltung_tab(self):
+        """Tab für Lagerhaltungs-Analyse: Welche Teile lohnen sich im Lager?"""
+        frame = ttk.Frame(self.notebook, padding='10')
+        self.notebook.add(frame, text='📦 Lagerhaltung')
+        
+        # Info-Label
+        info_frame = ttk.Frame(frame)
+        info_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
+        
+        info_text = (
+            "Analyse der Verkaufsfrequenz: Teile die alle 1-2 Monate verkauft werden (≤60 Tage) "
+            "lohnen sich im Lager. Teile mit >120 Tagen zwischen Verkäufen sind Lagerhüter."
+        )
+        ttk.Label(info_frame, text=info_text, wraplength=1200).grid(row=0, column=0, sticky='w')
+        
+        # Filter-Steuerung
+        control = ttk.Frame(frame)
+        control.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+        
+        ttk.Label(control, text='Anzeigen:').grid(row=0, column=0)
+        self.lager_filter_var = tk.StringVar(value='alle')
+        ttk.Combobox(
+            control, 
+            textvariable=self.lager_filter_var,
+            values=['alle', 'nur lohnend', 'nur grenzwertig', 'nur nicht lohnend'],
+            width=18,
+            state='readonly'
+        ).grid(row=0, column=1, padx=(5, 20))
+        
+        ttk.Button(control, text='Aktualisieren', command=self._update_lagerhaltung).grid(row=0, column=2, padx=(5, 10))
+        ttk.Button(control, text='Als CSV exportieren', command=self._export_lagerhaltung).grid(row=0, column=3)
+        
+        # Statistik-Labels
+        self.lager_stats_label = ttk.Label(control, text='')
+        self.lager_stats_label.grid(row=0, column=4, padx=(20, 0), sticky='w')
+        
+        # Tabelle
+        columns = ('teilenummer', 'bezeichnung', 'kategorie', 'tage', 'verkäufe', 'menge', 'umsatz', 'empfehlung')
+        self.lager_tree = ttk.Treeview(frame, columns=columns, show='headings')
+        headings = {
+            'teilenummer': 'Teilenummer',
+            'bezeichnung': 'Bezeichnung',
+            'kategorie': 'Kategorie',
+            'tage': 'Ø Tage',
+            'verkäufe': 'Verkäufe',
+            'menge': 'Gesamtmenge',
+            'umsatz': 'Umsatz (€)',
+            'empfehlung': 'Empfehlung',
+        }
+        widths = {
+            'teilenummer': 120, 'bezeichnung': 280, 'kategorie': 120, 
+            'tage': 70, 'verkäufe': 70, 'menge': 100, 'umsatz': 100, 'empfehlung': 140
+        }
+        aligns = {'tage': tk.E, 'verkäufe': tk.E, 'menge': tk.E, 'umsatz': tk.E}
+        for col in columns:
+            self.lager_tree.heading(col, text=headings[col])
+            self.lager_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
+        
+        self.lager_tree.grid(row=2, column=0, sticky='nsew')
+        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=self.lager_tree.yview)
+        scrollbar.grid(row=2, column=1, sticky='ns')
+        self.lager_tree.configure(yscrollcommand=scrollbar.set)
+        
+        frame.rowconfigure(2, weight=1)
         frame.columnconfigure(0, weight=1)
 
     def _build_chart_tab(self):
@@ -777,18 +976,23 @@ class AnalyseApp(tk.Tk):
 
         storage_mode = self.storage_var.get()
         self.status_label.config(text='Datei wird geladen...')
-        self.update_idletasks()
-
-        progress_ui = self._show_progress('Importiere Datei...')
+        self.update()
+        
+        # Prüfe Dateigröße - nur bei großen Dateien (>1MB) Fortschrittsanzeige
+        file_size = os.path.getsize(filepath)
+        use_progress = file_size > 1_000_000  # 1 MB
+        
+        progress_ui = self._show_progress('Importiere Datei...') if use_progress else None
 
         try:
             if storage_mode == 'sqlite':
                 if self.sqlite_store:
                     self.sqlite_store.close()
                 self.sqlite_store = SQLiteDataStore()
+                progress_cb = (lambda done, total: self._update_progress(progress_ui, done, total)) if use_progress else None
                 metadata, _ = self.parser.parse_file(
                     filepath,
-                    progress_callback=lambda done, total: self._update_progress(progress_ui, done, total),
+                    progress_callback=progress_cb,
                     record_callback=self.sqlite_store.insert_record,
                     store_records=False,
                 )
@@ -797,9 +1001,10 @@ class AnalyseApp(tk.Tk):
                 self.filtered_data = []
                 self.statistik = TeilenummerStatistik(db_store=self.sqlite_store)
             else:
+                progress_cb = (lambda done, total: self._update_progress(progress_ui, done, total)) if use_progress else None
                 metadata, data = self.parser.parse_file(
                     filepath,
-                    progress_callback=lambda done, total: self._update_progress(progress_ui, done, total),
+                    progress_callback=progress_cb,
                     record_callback=None,
                     store_records=True,
                 )
@@ -818,7 +1023,8 @@ class AnalyseApp(tk.Tk):
             messagebox.showerror('Fehler', f'Die Datei konnte nicht geladen werden:\n{exc}')
             self.status_label.config(text='Fehler beim Laden')
         finally:
-            self._close_progress(progress_ui)
+            if progress_ui:
+                self._close_progress(progress_ui)
 
     def _show_progress(self, title):
         window = tk.Toplevel(self)
@@ -826,28 +1032,37 @@ class AnalyseApp(tk.Tk):
         window.geometry('360x100')
         window.resizable(False, False)
         window.transient(self)
+        window.grab_set()  # Modal machen
         ttk.Label(window, text=title).pack(pady=(10, 5))
         progress = ttk.Progressbar(window, orient='horizontal', mode='determinate', length=300)
         progress.pack(pady=5)
         info = ttk.Label(window, text='0%')
         info.pack()
-        window.update_idletasks()
-        return {'window': window, 'bar': progress, 'info': info}
+        window.update()
+        return {'window': window, 'bar': progress, 'info': info, 'last_update': 0}
 
     def _update_progress(self, progress_ui, done, total):
         if not progress_ui:
             return
+        # Nur alle 5% aktualisieren für bessere Performance
+        percent = min(int(done / total * 100), 100)
+        if percent - progress_ui.get('last_update', 0) < 5 and percent < 100:
+            return
+        progress_ui['last_update'] = percent
         bar = progress_ui['bar']
         label = progress_ui['info']
         bar['maximum'] = total
         bar['value'] = done
-        percent = min(int(done / total * 100), 100)
         label.config(text=f'{percent}%')
-        progress_ui['window'].update_idletasks()
+        progress_ui['window'].update()
 
     def _close_progress(self, progress_ui):
-        if progress_ui and progress_ui['window']:
-            progress_ui['window'].destroy()
+        if progress_ui and progress_ui.get('window'):
+            try:
+                progress_ui['window'].grab_release()
+                progress_ui['window'].destroy()
+            except:
+                pass
 
     def _update_meta_label(self):
         meta_text = f"Datensätze: {self.statistik.get_record_count():,}".replace(',', '.')
@@ -859,9 +1074,10 @@ class AnalyseApp(tk.Tk):
         self._update_time_filter_options()
         self._apply_filter()
         self._update_top_list()
+        # Lagerhaltung wird manuell über Tab aktualisiert
         self._update_time_analysis()
         self._update_summary()
-        self._update_chart()
+        # Chart wird erst bei Bedarf geladen
 
     # --- Filter -----------------------------------------------------------
     def _update_time_filter_options(self):
@@ -933,6 +1149,91 @@ class AnalyseApp(tk.Tk):
                 f"{item.get('gesamtumsatz', 0.0):.2f}",
                 item.get('anzahl_kunden', 0),
             ))
+
+    def _update_lagerhaltung(self):
+        """Aktualisiert die Lagerhaltungs-Analyse Tabelle."""
+        if not self.statistik:
+            return
+        
+        for item in self.lager_tree.get_children():
+            self.lager_tree.delete(item)
+        
+        # Nur einmal berechnen!
+        alle_analyse = self.statistik.get_lagerhaltung_analyse()
+        
+        # Statistiken berechnen
+        lohnend = sum(1 for a in alle_analyse if 'Lohnend' in a['kategorie'])
+        grenzwertig = sum(1 for a in alle_analyse if 'Grenzwertig' in a['kategorie'])
+        nicht_lohnend = sum(1 for a in alle_analyse if 'Nicht lohnend' in a['kategorie'])
+        
+        self.lager_stats_label.config(
+            text=f"✅ Lohnend: {lohnend}  |  ⚠️ Grenzwertig: {grenzwertig}  |  ❌ Nicht lohnend: {nicht_lohnend}"
+        )
+        
+        # Filter anwenden
+        filter_val = self.lager_filter_var.get()
+        if filter_val == 'nur lohnend':
+            analyse = [a for a in alle_analyse if 'Lohnend' in a['kategorie']]
+        elif filter_val == 'nur grenzwertig':
+            analyse = [a for a in alle_analyse if 'Grenzwertig' in a['kategorie']]
+        elif filter_val == 'nur nicht lohnend':
+            analyse = [a for a in alle_analyse if 'Nicht lohnend' in a['kategorie']]
+        else:
+            analyse = alle_analyse
+        
+        # Tabelle füllen
+        for item in analyse:
+            tage_str = f"{item['durchschnitt_tage']:.0f}" if item['durchschnitt_tage'] else "-"
+            self.lager_tree.insert('', 'end', values=(
+                item['teilenummer'],
+                item['bezeichnung'],
+                item['kategorie'],
+                tage_str,
+                item['anzahl_verkäufe'],
+                f"{item['gesamtmenge']:.2f}",
+                f"{item['gesamtumsatz']:.2f}",
+                item['empfehlung'],
+            ))
+
+    def _export_lagerhaltung(self):
+        """Exportiert die Lagerhaltungs-Analyse als CSV."""
+        if not self.statistik:
+            messagebox.showwarning('Hinweis', 'Keine Daten vorhanden.')
+            return
+        
+        filepath = filedialog.asksaveasfilename(
+            title='Lagerhaltungs-Analyse exportieren',
+            defaultextension='.csv',
+            filetypes=[('CSV', '*.csv')],
+            initialfile=f"lagerhaltung_analyse_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        )
+        if not filepath:
+            return
+        
+        analyse = self.statistik.get_lagerhaltung_analyse()
+        
+        try:
+            with open(filepath, 'w', newline='', encoding='utf-8-sig') as handle:
+                writer = csv.writer(handle, delimiter=';')
+                writer.writerow([
+                    'Teilenummer', 'Bezeichnung', 'Kategorie', 'Ø Tage zwischen Verkäufen',
+                    'Anzahl Verkäufe', 'Gesamtmenge', 'Gesamtumsatz (€)', 'Empfehlung'
+                ])
+                for item in analyse:
+                    tage_str = f"{item['durchschnitt_tage']:.0f}" if item['durchschnitt_tage'] else ""
+                    writer.writerow([
+                        item['teilenummer'],
+                        item['bezeichnung'],
+                        item['kategorie'].replace('✅ ', '').replace('⚠️ ', '').replace('❌ ', ''),
+                        tage_str,
+                        item['anzahl_verkäufe'],
+                        f"{item['gesamtmenge']:.2f}".replace('.', ','),
+                        f"{item['gesamtumsatz']:.2f}".replace('.', ','),
+                        item['empfehlung'],
+                    ])
+            messagebox.showinfo('Export', f'Lagerhaltungs-Analyse gespeichert:\n{filepath}')
+        except Exception as exc:
+            messagebox.showerror('Fehler', f'Export fehlgeschlagen:\n{exc}')
 
     def _load_all_data(self, search_term=None):
         if not self.statistik:
@@ -1125,18 +1426,9 @@ class AnalyseApp(tk.Tk):
 # Start
 # -----------------------------------------------------------------------------
 def main():
-    print("DEBUG: Erstelle App...")
-    try:
-        app = AnalyseApp()
-        print("DEBUG: App erstellt, starte mainloop...")
-        app.mainloop()
-        print("DEBUG: Beendet")
-    except Exception as e:
-        print(f"DEBUG FEHLER: {e}")
-        import traceback
-        traceback.print_exc()
+    app = AnalyseApp()
+    app.mainloop()
 
 
 if __name__ == '__main__':
-    print("DEBUG: Script gestartet")
     main()
