@@ -776,7 +776,7 @@ class AnalyseApp(tk.Tk):
         widths = {'teilenummer': 120, 'bezeichnung': 320, 'vorgaenge': 90, 'menge': 110, 'umsatz': 110, 'kunden': 100}
         aligns = {'vorgaenge': tk.E, 'menge': tk.E, 'umsatz': tk.E, 'kunden': tk.E}
         for col in columns:
-            self.top_tree.heading(col, text=headings[col])
+            self.top_tree.heading(col, text=headings[col], command=lambda c=col: self._sort_treeview(self.top_tree, c, False))
             self.top_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
         self.top_tree.grid(row=1, column=0, sticky='nsew')
         ttk.Scrollbar(frame, orient='vertical', command=self.top_tree.yview).grid(row=1, column=1, sticky='ns')
@@ -839,7 +839,7 @@ class AnalyseApp(tk.Tk):
         }
         aligns = {'tage': tk.E, 'verkäufe': tk.E, 'menge': tk.E, 'umsatz': tk.E}
         for col in columns:
-            self.lager_tree.heading(col, text=headings[col])
+            self.lager_tree.heading(col, text=headings[col], command=lambda c=col: self._sort_treeview(self.lager_tree, c, False))
             self.lager_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
         
         self.lager_tree.grid(row=2, column=0, sticky='nsew')
@@ -1211,6 +1211,40 @@ class AnalyseApp(tk.Tk):
                 f"{item['gesamtumsatz']:.2f}",
                 item['empfehlung'],
             ))
+
+    def _sort_treeview(self, tree, col, reverse):
+        """Sortiert eine Treeview-Tabelle nach der angeklickten Spalte."""
+        # Hole alle Zeilen mit ihren Werten
+        data_list = [(tree.set(child, col), child) for child in tree.get_children('')]
+        
+        # Erkenne ob numerische Sortierung nötig ist
+        try:
+            # Versuche als Zahl zu sortieren (entferne € und Tausender-Trennzeichen)
+            data_list.sort(key=lambda t: float(t[0].replace(',', '.').replace('€', '').strip()), reverse=reverse)
+        except (ValueError, AttributeError):
+            # Sonst alphabetisch sortieren
+            data_list.sort(key=lambda t: t[0].lower(), reverse=reverse)
+        
+        # Neuordnen der Zeilen
+        for index, (val, child) in enumerate(data_list):
+            tree.move(child, '', index)
+        
+        # Spalten-Überschrift aktualisieren um Sortierrichtung anzuzeigen
+        for column in tree['columns']:
+            current_heading = tree.heading(column)['text']
+            # Entferne alte Pfeile
+            if current_heading.endswith(' ▲') or current_heading.endswith(' ▼'):
+                current_heading = current_heading[:-2]
+            
+            if column == col:
+                # Füge Pfeil zur sortierten Spalte hinzu
+                arrow = ' ▼' if reverse else ' ▲'
+                tree.heading(column, text=current_heading + arrow, 
+                           command=lambda c=col: self._sort_treeview(tree, c, not reverse))
+            else:
+                # Andere Spalten ohne Pfeil, aber mit Sortier-Command
+                tree.heading(column, text=current_heading,
+                           command=lambda c=column: self._sort_treeview(tree, c, False))
 
     def _export_lagerhaltung(self):
         """Exportiert die Lagerhaltungs-Analyse als CSV."""
