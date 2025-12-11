@@ -6,9 +6,11 @@ Ein plattformübergreifendes Analysewerkzeug für Windows und macOS zur statisti
 
 ### Windows (keine Python-Installation erforderlich!)
 
-**[⬇️ Teilenummer-Analyse.exe herunterladen](https://github.com/SHP-ART/AnalyseSystem/raw/master/dist/Teilenummer-Analyse.exe)** (ca. 41 MB)
+**[⬇️ Teilenummer-Analyse.exe v1.1.0 herunterladen](https://github.com/SHP-ART/AnalyseSystem/releases/download/v1.1.0/Teilenummer-Analyse.exe)** (38,92 MB)
 
 Die EXE-Datei ist eigenständig und läuft auf jedem Windows-PC ohne zusätzliche Installation.
+
+> **Neu in v1.1.0:** Zeitraum-Filter für Lagerhaltung-Analyse (1-12 Monate auswählbar)
 
 ### macOS / Linux / Python-Version
 
@@ -27,7 +29,7 @@ Siehe Installationsanleitung unten für die Python-basierte Version.
 
 ## Schnellstart (Windows EXE)
 
-1. **[Teilenummer-Analyse.exe herunterladen](https://github.com/SHP-ART/AnalyseSystem/raw/master/dist/Teilenummer-Analyse.exe)**
+1. **[Teilenummer-Analyse.exe v1.1.0 herunterladen](https://github.com/SHP-ART/AnalyseSystem/releases/download/v1.1.0/Teilenummer-Analyse.exe)**
 2. **Doppelklick auf die heruntergeladene Datei**
 3. **Fertig!** - Keine Installation, kein Python erforderlich
 
