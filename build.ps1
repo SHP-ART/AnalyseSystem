@@ -1,8 +1,8 @@
-# PowerShell Build-Skript für Teilenummer-Analyse
+# PowerShell Build-Skript für LagerPilot
 # Erstellt eine ausführbare .exe Datei
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Teilenummer-Analyse - Windows Build" -ForegroundColor Cyan
+Write-Host "LagerPilot - Windows Build" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -35,24 +35,24 @@ if (Test-Path "*.spec") { Remove-Item -Force "*.spec" }
 $iconParam = if (Test-Path "icon.ico") { "--icon=icon.ico" } else { "" }
 
 if ($iconParam) {
-    python -m PyInstaller --onefile --windowed --name "Teilenummer-Analyse" $iconParam teilenummer_analyse.py
+    python -m PyInstaller --onefile --windowed --name "LagerPilot" $iconParam teilenummer_analyse.py
 } else {
-    python -m PyInstaller --onefile --windowed --name "Teilenummer-Analyse" teilenummer_analyse.py
+    python -m PyInstaller --onefile --windowed --name "LagerPilot" teilenummer_analyse.py
 }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-if (Test-Path "dist\Teilenummer-Analyse.exe") {
+if (Test-Path "dist\LagerPilot.exe") {
     Write-Host "BUILD ERFOLGREICH!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Die ausführbare Datei befindet sich in:" -ForegroundColor Green
-    Write-Host "  dist\Teilenummer-Analyse.exe" -ForegroundColor White
+    Write-Host "  dist\LagerPilot.exe" -ForegroundColor White
     Write-Host ""
     Write-Host "Diese Datei kann ohne Python-Installation" -ForegroundColor Cyan
     Write-Host "auf jedem Windows-PC ausgeführt werden." -ForegroundColor Cyan
     
     # Zeige Dateigröße
-    $fileSize = (Get-Item "dist\Teilenummer-Analyse.exe").Length / 1MB
+    $fileSize = (Get-Item "dist\LagerPilot.exe").Length / 1MB
     Write-Host ""
     Write-Host "Dateigröße: $([math]::Round($fileSize, 2)) MB" -ForegroundColor Yellow
 } else {

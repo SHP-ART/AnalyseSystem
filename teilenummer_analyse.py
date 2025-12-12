@@ -578,7 +578,7 @@ class TeilenummerStatistik:
         
         Args:
             max_tage_lohnend: Maximale Tage zwischen Verkäufen für "Lohnend"
-            monate: Anzahl der Monate rückwärts (None = alle Daten)
+            monate: Anzahl der Monate rückwärts vom letzten Datum (None = alle Daten)
         """
         if self.db_store:
             return self._get_lagerhaltung_from_db(max_tage_lohnend, monate)
@@ -586,8 +586,15 @@ class TeilenummerStatistik:
         # Filtere Daten nach Zeitraum wenn angegeben
         dataset = self.data
         if monate is not None:
-            heute = datetime.now()
-            stichtag = heute - timedelta(days=monate * 30.44)
+            # Finde das letzte Datum in den Daten (nicht heute!)
+            alle_daten = [r.get('abgabe_iso', '') for r in self.data if r.get('abgabe_iso')]
+            if alle_daten:
+                letztes_datum_str = max(alle_daten)
+                letztes_datum = datetime.strptime(letztes_datum_str, '%Y-%m-%d')
+            else:
+                letztes_datum = datetime.now()
+            
+            stichtag = letztes_datum - timedelta(days=monate * 30.44)
             stichtag_iso = stichtag.strftime('%Y-%m-%d')
             dataset = [r for r in self.data if r.get('abgabe_iso', '') >= stichtag_iso]
         
@@ -602,6 +609,16 @@ class TeilenummerStatistik:
                     'menge': record['menge'],
                     'umsatz': record['vk_preis'],
                 })
+        
+        # Berechne den GESAMTEN Zeitraum der Daten (für alle Teile gleich!)
+        alle_daten_iso = [record.get('abgabe_iso') for record in dataset if record.get('abgabe_iso')]
+        if len(alle_daten_iso) >= 2:
+            erstes_datum_gesamt = datetime.strptime(min(alle_daten_iso), '%Y-%m-%d')
+            letztes_datum_gesamt = datetime.strptime(max(alle_daten_iso), '%Y-%m-%d')
+            gesamt_zeitraum_monate = max(1, ((letztes_datum_gesamt.year - erstes_datum_gesamt.year) * 12 + 
+                                            letztes_datum_gesamt.month - erstes_datum_gesamt.month) + 1)
+        else:
+            gesamt_zeitraum_monate = 1
         
         ergebnis = []
         for teilenummer, verkäufe in teil_verkäufe.items():
@@ -658,6 +675,27 @@ class TeilenummerStatistik:
             # 11. Verbrauchsprognose (nächste 3 Monate)
             prognose_3m = monatsdurchschnitt_menge * 3
             
+            # Berechne in wie vielen verschiedenen Monaten verkauft wurde
+            verkaufs_monate = set()
+            for v in verkäufe:
+                datum = datetime.strptime(v['datum'], '%Y-%m-%d')
+                verkaufs_monate.add((datum.year, datum.month))
+            anzahl_verkaufsmonate = len(verkaufs_monate)
+            
+            # Verwende den GESAMTEN Zeitraum der Daten (für alle Teile gleich!)
+            zeitraum_monate = gesamt_zeitraum_monate
+            
+            # Lagerfähigkeit: Prozent der Monate mit Verkauf
+            lagerfaehigkeit_prozent = (anzahl_verkaufsmonate / zeitraum_monate) * 100 if zeitraum_monate > 0 else 0
+            
+            # Lagerfähigkeits-Status
+            if lagerfaehigkeit_prozent >= 80:
+                lagerfaehig = "✅ Ja"
+            elif lagerfaehigkeit_prozent >= 50:
+                lagerfaehig = "⚠️ Bedingt"
+            else:
+                lagerfaehig = "❌ Nein"
+            
             ergebnis.append({
                 'teilenummer': teilenummer,
                 'bezeichnung': verkäufe[0]['bezeichnung'],
@@ -671,6 +709,10 @@ class TeilenummerStatistik:
                 'trend': trend,
                 'saisonalität': saisonalität,
                 'prognose_3_monate': prognose_3m,
+                'anzahl_verkaufsmonate': anzahl_verkaufsmonate,
+                'zeitraum_monate': zeitraum_monate,
+                'lagerfaehigkeit_prozent': lagerfaehigkeit_prozent,
+                'lagerfaehig': lagerfaehig,
                 'kategorie': kategorie,
                 'empfehlung': empfehlung,
             })
@@ -722,11 +764,19 @@ class TeilenummerStatistik:
 
     def _get_lagerhaltung_from_db(self, max_tage_lohnend=60, monate=None):
         """SQLite-Version der Lagerhaltungsanalyse."""
-        # WHERE-Klausel für Zeitfilter
+        # WHERE-Klausel für Zeitfilter - basierend auf dem letzten Datum in den Daten
         where_clause = ""
         if monate is not None:
-            heute = datetime.now()
-            stichtag = heute - timedelta(days=monate * 30.44)
+            # Finde das letzte Datum in der Datenbank
+            max_datum = self.db_store.conn.execute(
+                "SELECT MAX(abgabe_iso) FROM records WHERE abgabe_iso IS NOT NULL"
+            ).fetchone()[0]
+            if max_datum:
+                letztes_datum = datetime.strptime(max_datum, '%Y-%m-%d')
+            else:
+                letztes_datum = datetime.now()
+            
+            stichtag = letztes_datum - timedelta(days=monate * 30.44)
             stichtag_iso = stichtag.strftime('%Y-%m-%d')
             where_clause = f"WHERE abgabe_iso >= '{stichtag_iso}'"
         
@@ -779,6 +829,29 @@ class TeilenummerStatistik:
             ORDER BY durchschnitt_tage NULLS LAST
         """
         cur = self.db_store.conn.execute(query)
+        
+        # Berechne den GESAMTEN Zeitraum der Daten (für alle Teile gleich!)
+        gesamt_query = """
+            SELECT MIN(abgabe_iso), MAX(abgabe_iso) 
+            FROM records 
+            WHERE abgabe_iso IS NOT NULL
+        """
+        if monate is not None:
+            # Mit Zeitfilter - nutze where_clause
+            gesamt_query = f"""
+                SELECT MIN(abgabe_iso), MAX(abgabe_iso) 
+                FROM records 
+                WHERE abgabe_iso IS NOT NULL {(' AND ' + where_clause.replace('WHERE ', '')) if where_clause else ''}
+            """
+        gesamt_result = self.db_store.conn.execute(gesamt_query).fetchone()
+        if gesamt_result and gesamt_result[0] and gesamt_result[1]:
+            erstes_datum_gesamt = datetime.strptime(gesamt_result[0], '%Y-%m-%d')
+            letztes_datum_gesamt = datetime.strptime(gesamt_result[1], '%Y-%m-%d')
+            gesamt_zeitraum_monate = max(1, ((letztes_datum_gesamt.year - erstes_datum_gesamt.year) * 12 + 
+                                            letztes_datum_gesamt.month - erstes_datum_gesamt.month) + 1)
+        else:
+            gesamt_zeitraum_monate = 1
+        
         ergebnis = []
         for row in cur.fetchall():
             avg_tage = row[5]
@@ -809,6 +882,27 @@ class TeilenummerStatistik:
             trend = self._berechne_trend(verkäufe) if len(verkäufe) >= 4 else "Stabil"
             saisonalität = self._erkenne_saisonalitaet(verkäufe) if len(verkäufe) >= 6 else "k.A."
             
+            # Berechne in wie vielen verschiedenen Monaten verkauft wurde
+            verkaufs_monate = set()
+            for v in verkäufe:
+                datum = datetime.strptime(v['datum'], '%Y-%m-%d')
+                verkaufs_monate.add((datum.year, datum.month))
+            anzahl_verkaufsmonate = len(verkaufs_monate)
+            
+            # Verwende den GESAMTEN Zeitraum der Daten (für alle Teile gleich!)
+            zeitraum_monate = gesamt_zeitraum_monate
+            
+            # Lagerfähigkeit: Prozent der Monate mit Verkauf
+            lagerfaehigkeit_prozent = (anzahl_verkaufsmonate / zeitraum_monate) * 100 if zeitraum_monate > 0 else 0
+            
+            # Lagerfähigkeits-Status
+            if lagerfaehigkeit_prozent >= 80:
+                lagerfaehig = "✅ Ja"
+            elif lagerfaehigkeit_prozent >= 50:
+                lagerfaehig = "⚠️ Bedingt"
+            else:
+                lagerfaehig = "❌ Nein"
+            
             # 11. Prognose
             prognose_3m = row[7] * 3 if row[7] else 0
             
@@ -825,6 +919,10 @@ class TeilenummerStatistik:
                 'trend': trend,
                 'saisonalität': saisonalität,
                 'prognose_3_monate': prognose_3m,
+                'anzahl_verkaufsmonate': anzahl_verkaufsmonate,
+                'zeitraum_monate': zeitraum_monate,
+                'lagerfaehigkeit_prozent': lagerfaehigkeit_prozent,
+                'lagerfaehig': lagerfaehig,
                 'kategorie': kategorie,
                 'empfehlung': empfehlung,
             })
@@ -834,10 +932,106 @@ class TeilenummerStatistik:
 # -----------------------------------------------------------------------------
 # GUI
 # -----------------------------------------------------------------------------
+
+class TreeviewHeaderTooltip:
+    """Tooltip für Treeview-Spaltenüberschriften mit Verzögerung."""
+    
+    def __init__(self, treeview, tooltips: dict, delay_ms: int = 3000):
+        """
+        Args:
+            treeview: Das ttk.Treeview-Widget
+            tooltips: Dict mit {spalten_id: tooltip_text}
+            delay_ms: Verzögerung in Millisekunden (Standard: 3000 = 3 Sekunden)
+        """
+        self.treeview = treeview
+        self.tooltips = tooltips
+        self.delay_ms = delay_ms
+        self.tooltip_window = None
+        self.after_id = None
+        self.current_column = None
+        
+        # Events binden
+        self.treeview.bind('<Motion>', self._on_motion)
+        self.treeview.bind('<Leave>', self._hide_tooltip)
+    
+    def _on_motion(self, event):
+        """Prüft, ob Maus über Überschrift ist."""
+        region = self.treeview.identify_region(event.x, event.y)
+        
+        if region == 'heading':
+            column = self.treeview.identify_column(event.x)
+            # Konvertiere #1, #2, etc. zu Spalten-ID
+            if column:
+                try:
+                    col_idx = int(column.replace('#', '')) - 1
+                    columns = self.treeview['columns']
+                    if 0 <= col_idx < len(columns):
+                        col_id = columns[col_idx]
+                        
+                        if col_id != self.current_column:
+                            # Neue Spalte - Timer zurücksetzen
+                            self._cancel_timer()
+                            self._hide_tooltip()
+                            self.current_column = col_id
+                            
+                            if col_id in self.tooltips:
+                                self.after_id = self.treeview.after(
+                                    self.delay_ms, 
+                                    lambda: self._show_tooltip(event.x_root, event.y_root, col_id)
+                                )
+                except (ValueError, IndexError):
+                    pass
+        else:
+            # Nicht über Überschrift
+            self._cancel_timer()
+            self._hide_tooltip()
+            self.current_column = None
+    
+    def _show_tooltip(self, x, y, col_id):
+        """Zeigt das Tooltip-Fenster."""
+        if col_id not in self.tooltips:
+            return
+        
+        self._hide_tooltip()
+        
+        self.tooltip_window = tk.Toplevel(self.treeview)
+        self.tooltip_window.wm_overrideredirect(True)
+        self.tooltip_window.wm_geometry(f"+{x + 10}+{y + 10}")
+        
+        # Tooltip-Stil
+        frame = tk.Frame(self.tooltip_window, background='#ffffcc', borderwidth=1, relief='solid')
+        frame.pack()
+        
+        label = tk.Label(
+            frame, 
+            text=self.tooltips[col_id],
+            background='#ffffcc',
+            foreground='#000000',
+            font=('Segoe UI', 9),
+            justify='left',
+            wraplength=300,
+            padx=8,
+            pady=5
+        )
+        label.pack()
+    
+    def _hide_tooltip(self, event=None):
+        """Versteckt das Tooltip-Fenster."""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+    
+    def _cancel_timer(self):
+        """Bricht den Timer ab."""
+        if self.after_id:
+            self.treeview.after_cancel(self.after_id)
+            self.after_id = None
+
+
 class AnalyseApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title('AnalyseSystem by Sven Hube')
+        self.title('LagerPilot by Sven Hube')
         self.geometry('1400x900')
 
         self.parser = TeilenummerParser()
@@ -848,6 +1042,7 @@ class AnalyseApp(tk.Tk):
         self.current_file = None
         self.filter_params = {'type': 'alle', 'value': None}
         self.sqlite_store: SQLiteDataStore | None = None
+        self.alle_produkte_liste = []  # Für Autocomplete
 
         self._build_ui()
         self._build_menu()
@@ -981,92 +1176,139 @@ class AnalyseApp(tk.Tk):
         info_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
         
         info_text = (
-            "Analyse der Verkaufsfrequenz: Teile die alle 1-2 Monate verkauft werden (≤60 Tage) "
-            "lohnen sich im Lager. Teile mit >120 Tagen zwischen Verkäufen sind Lagerhüter."
+            "Spalten: 'Freq./Mon.'=Verkäufe÷Aktive Monate | 'Stk./Mon.'=Stückzahl÷Gesamtmonate | "
+            "'Lagerfähig'=✅ bei ≥80% der Monate mit Verkauf | 💡 Maus 3 Sek. auf Spalte = Tooltip"
         )
         ttk.Label(info_frame, text=info_text, wraplength=1200).grid(row=0, column=0, sticky='w')
         
-        # Filter-Steuerung
+        # Filter-Steuerung Zeile 1
         control = ttk.Frame(frame)
-        control.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+        control.grid(row=1, column=0, sticky='ew', pady=(0, 5))
         
-        # Zeitraum-Filter
-        ttk.Label(control, text='Zeitraum:').grid(row=0, column=0)
+        # Zeitraum-Variable (intern auf "Alle Daten" gesetzt)
         self.lager_monate_var = tk.StringVar(value='Alle Daten')
-        monate_options = ['Alle Daten'] + [f'{i} Monat' if i == 1 else f'{i} Monate' for i in range(1, 13)]
-        ttk.Combobox(
-            control,
-            textvariable=self.lager_monate_var,
-            values=monate_options,
-            width=12,
-            state='readonly'
-        ).grid(row=0, column=1, padx=(5, 20))
-        
-        # Zeitraum-Anzeige
         self.lager_zeitraum_label = ttk.Label(control, text='', foreground='blue')
-        self.lager_zeitraum_label.grid(row=0, column=2, padx=(0, 20))
+        self.lager_zeitraum_label.grid(row=0, column=0, padx=(0, 15))
         
-        ttk.Label(control, text='Anzeigen:').grid(row=0, column=3)
+        # Produkt-Filter (Combobox mit Autocomplete)
+        ttk.Label(control, text='Produkte:').grid(row=0, column=1)
+        self.lager_produkt_var = tk.StringVar(value='')
+        self.lager_produkt_entry = ttk.Combobox(control, textvariable=self.lager_produkt_var, width=35)
+        self.lager_produkt_entry.grid(row=0, column=2, padx=(5, 5))
+        self.lager_produkt_entry.bind('<KeyRelease>', self._on_produkt_keyrelease)
+        self.lager_produkt_entry.bind('<<ComboboxSelected>>', self._on_produkt_selected_and_update)
+        self.lager_produkt_entry.bind('<Return>', lambda e: self._update_lagerhaltung())
+        
+        # Speicher für alle Produkte
+        self.alle_produkte_liste = []
+        
+        ttk.Button(control, text='×', width=2, command=self._clear_produkt_filter_and_update).grid(row=0, column=3, padx=(0, 15))
+        
+        ttk.Label(control, text='Anzeigen:').grid(row=0, column=4)
         self.lager_filter_var = tk.StringVar(value='alle')
-        ttk.Combobox(
+        self.lager_filter_combo = ttk.Combobox(
             control, 
             textvariable=self.lager_filter_var,
-            values=['alle', 'nur lohnend', 'nur grenzwertig', 'nur nicht lohnend'],
+            values=['alle', 'nur lohnend', 'nur grenzwertig', 'nur nicht lohnend', 'nur lagerfähig'],
             width=18,
             state='readonly'
-        ).grid(row=0, column=4, padx=(5, 20))
+        )
+        self.lager_filter_combo.grid(row=0, column=5, padx=(5, 15))
+        self.lager_filter_combo.bind('<<ComboboxSelected>>', lambda e: self._update_lagerhaltung())
         
-        ttk.Button(control, text='Aktualisieren', command=self._update_lagerhaltung).grid(row=0, column=5, padx=(5, 10))
-        ttk.Button(control, text='Als CSV exportieren', command=self._export_lagerhaltung).grid(row=0, column=6)
+        ttk.Button(control, text='CSV Export', command=self._export_lagerhaltung).grid(row=0, column=6)
         
-        # Suchfeld
-        ttk.Label(control, text='Suche:').grid(row=0, column=7, padx=(20, 5))
+        # Filter-Steuerung Zeile 2 - Zusätzliche Filter
+        control2 = ttk.Frame(frame)
+        control2.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        
+        # Suchfeld (für Teilenummer/Bezeichnung)
+        ttk.Label(control2, text='Suche:').grid(row=0, column=0, padx=(0, 5))
         self.lager_search_var = tk.StringVar()
         self.lager_search_var.trace_add('write', lambda *args: self._search_lager_list())
-        ttk.Entry(control, textvariable=self.lager_search_var, width=25).grid(row=0, column=8, padx=(0, 20))
+        ttk.Entry(control2, textvariable=self.lager_search_var, width=20).grid(row=0, column=1, padx=(0, 15))
+        
+        ttk.Label(control2, text='Min. Verkäufe:').grid(row=0, column=2)
+        self.lager_min_verkaeufe_var = tk.StringVar(value='0')
+        self.lager_min_verkaeufe_var.trace_add('write', lambda *args: self._delayed_update_lagerhaltung())
+        ttk.Spinbox(control2, from_=0, to=100, textvariable=self.lager_min_verkaeufe_var, width=6).grid(row=0, column=3, padx=(5, 15))
+        
+        ttk.Label(control2, text='Min. Ø€/Mon.:').grid(row=0, column=4)
+        self.lager_min_umsatz_var = tk.StringVar(value='0')
+        self.lager_min_umsatz_var.trace_add('write', lambda *args: self._delayed_update_lagerhaltung())
+        ttk.Spinbox(control2, from_=0, to=10000, increment=50, textvariable=self.lager_min_umsatz_var, width=8).grid(row=0, column=5, padx=(5, 15))
+        
+        ttk.Label(control2, text='Min. Kunden:').grid(row=0, column=6)
+        self.lager_min_kunden_var = tk.StringVar(value='0')
+        self.lager_min_kunden_var.trace_add('write', lambda *args: self._delayed_update_lagerhaltung())
+        ttk.Spinbox(control2, from_=0, to=50, textvariable=self.lager_min_kunden_var, width=6).grid(row=0, column=7, padx=(5, 15))
+        
+        ttk.Label(control2, text='Min. Mon.%:').grid(row=0, column=8)
+        self.lager_min_monatsprozent_var = tk.StringVar(value='0')
+        self.lager_min_monatsprozent_var.trace_add('write', lambda *args: self._delayed_update_lagerhaltung())
+        ttk.Spinbox(control2, from_=0, to=100, increment=10, textvariable=self.lager_min_monatsprozent_var, width=6).grid(row=0, column=9, padx=(5, 15))
         
         # Statistik-Labels
-        self.lager_stats_label = ttk.Label(control, text='')
-        self.lager_stats_label.grid(row=0, column=9, padx=(20, 0), sticky='w')
+        self.lager_stats_label = ttk.Label(control2, text='')
+        self.lager_stats_label.grid(row=0, column=10, padx=(20, 0), sticky='w')
         
         # Tabelle
-        columns = ('teilenummer', 'bezeichnung', 'tage', 'verkäufe', 'kunden', 'ø_menge', 'ø_umsatz', 'prognose', 'trend', 'saison', 'kategorie', 'empfehlung')
+        columns = ('teilenummer', 'bezeichnung', 'verkäufe', 'monate', 'verk_mon', 'kunden', 'lagerfaehig', 'ø_menge', 'ø_umsatz', 'tage', 'trend', 'kategorie', 'empfehlung')
         self.lager_tree = ttk.Treeview(frame, columns=columns, show='headings')
         headings = {
             'teilenummer': 'Teilenummer',
             'bezeichnung': 'Bezeichnung',
-            'tage': 'Ø Tage',
             'verkäufe': 'Verkäufe',
+            'monate': 'Freq./Mon.',
+            'verk_mon': 'Stk./Mon.',
             'kunden': 'Kunden',
-            'ø_menge': 'Ø/Mon.',
+            'lagerfaehig': 'Lagerfähig',
+            'ø_menge': 'Ø Menge/Mon.',
             'ø_umsatz': 'Ø €/Mon.',
-            'prognose': 'Prognose 3M',
+            'tage': 'Ø Tage zw.',
             'trend': 'Trend',
-            'saison': 'Saison',
             'kategorie': 'Kategorie',
             'empfehlung': 'Empfehlung',
         }
         widths = {
-            'teilenummer': 100, 'bezeichnung': 200, 'tage': 65, 'verkäufe': 65, 
-            'kunden': 60, 'ø_menge': 75, 'ø_umsatz': 85, 'prognose': 85,
-            'trend': 75, 'saison': 70, 'kategorie': 100, 'empfehlung': 120
+            'teilenummer': 100, 'bezeichnung': 180, 'verkäufe': 55, 
+            'monate': 50, 'verk_mon': 70, 'kunden': 50, 'lagerfaehig': 70, 'ø_menge': 75, 'ø_umsatz': 70,
+            'tage': 65, 'trend': 60, 'kategorie': 90, 'empfehlung': 100
         }
-        aligns = {'tage': tk.E, 'verkäufe': tk.E, 'kunden': tk.E, 'ø_menge': tk.E, 'ø_umsatz': tk.E, 'prognose': tk.E}
+        aligns = {'verkäufe': tk.E, 'monate': tk.CENTER, 'verk_mon': tk.E, 'kunden': tk.E, 'ø_menge': tk.E, 'ø_umsatz': tk.E, 'tage': tk.E}
         for col in columns:
             self.lager_tree.heading(col, text=headings[col], command=lambda c=col: self._sort_treeview(self.lager_tree, c, False))
             self.lager_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
         
-        self.lager_tree.grid(row=2, column=0, sticky='nsew')
+        self.lager_tree.grid(row=3, column=0, sticky='nsew')
         scrollbar = ttk.Scrollbar(frame, orient='vertical', command=self.lager_tree.yview)
-        scrollbar.grid(row=2, column=1, sticky='ns')
+        scrollbar.grid(row=3, column=1, sticky='ns')
         self.lager_tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Tooltips für Spaltenüberschriften (erscheinen nach 3 Sekunden)
+        tooltip_texte = {
+            'teilenummer': 'Die Artikelnummer des Teils aus dem DMS-System.',
+            'bezeichnung': 'Die Bezeichnung/Beschreibung des Artikels.',
+            'verkäufe': 'Gesamtanzahl aller Verkäufe im gewählten Zeitraum.',
+            'monate': 'Monatliche Verkaufsfrequenz.\nBerechnung: Anzahl Verkäufe ÷ Aktive Monate\nBeispiel: 6 Verkäufe in 3 aktiven Monaten = 2.0\nZeigt wie oft pro Monat durchschnittlich verkauft wird.',
+            'verk_mon': 'Durchschnittliche STÜCKZAHL pro Monat.\nBerechnung: Gesamtmenge ÷ Gesamtmonate\nZeigt wie viele Teile im Schnitt pro Monat verkauft werden.',
+            'kunden': 'Anzahl verschiedener Kunden, die dieses Teil gekauft haben.',
+            'lagerfaehig': 'Bewertung der Lagerfähigkeit:\n✅ = ≥80% der Monate mit Verkauf (sehr lagerfähig)\n⚠️ = 50-79% der Monate (bedingt lagerfähig)\n❌ = <50% der Monate (wenig lagerfähig)',
+            'ø_menge': 'Durchschnittlich verkaufte Stückzahl pro Monat\n(über den gesamten Zeitraum, nicht nur aktive Monate).',
+            'ø_umsatz': 'Durchschnittlicher Umsatz in Euro pro Monat\n(über den gesamten Zeitraum).',
+            'tage': 'Durchschnittliche Anzahl Tage zwischen zwei Verkäufen.\nNiedrigere Werte = häufigere Verkäufe = bessere Lagerfähigkeit.',
+            'trend': 'Verkaufsentwicklung der letzten Monate:\n📈 steigend = mehr Verkäufe\n➡️ stabil = gleichbleibend\n📉 fallend = weniger Verkäufe',
+            'kategorie': 'Gesamtbewertung basierend auf allen Faktoren:\n🟢 Lohnend = Empfohlen für Lager\n🟡 Grenzwertig = Einzelfallentscheidung\n🔴 Nicht lohnend = Nicht für Lager empfohlen',
+            'empfehlung': 'Konkrete Handlungsempfehlung für diesen Artikel\nbasierend auf der Analyse aller Verkaufsdaten.',
+        }
+        TreeviewHeaderTooltip(self.lager_tree, tooltip_texte, delay_ms=3000)
         
         # 9. Farbliche Hervorhebung
         self.lager_tree.tag_configure('lohnend', background='#d4edda')  # Hellgrün
         self.lager_tree.tag_configure('grenzwertig', background='#fff3cd')  # Hellgelb
         self.lager_tree.tag_configure('nicht_lohnend', background='#f8d7da')  # Hellrot
         
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(3, weight=1)
         frame.columnconfigure(0, weight=1)
 
     def _build_chart_tab(self):
@@ -1332,6 +1574,16 @@ class AnalyseApp(tk.Tk):
             self._update_summary()
         except Exception as e:
             print(f"Fehler in _update_summary: {e}")
+        
+        try:
+            self._init_produkt_liste()
+        except Exception as e:
+            print(f"Fehler in _init_produkt_liste: {e}")
+        
+        try:
+            self._update_lagerhaltung()
+        except Exception as e:
+            print(f"Fehler in _update_lagerhaltung: {e}")
 
     # --- Filter -----------------------------------------------------------
     def _update_time_filter_options(self):
@@ -1412,6 +1664,10 @@ class AnalyseApp(tk.Tk):
         for item in self.lager_tree.get_children():
             self.lager_tree.delete(item)
         
+        # Initialisiere Produktliste falls noch nicht vorhanden
+        if not self.alle_produkte_liste:
+            self._init_produkt_liste()
+        
         # Ermittle Zeitraum
         monate_str = self.lager_monate_var.get()
         if monate_str == 'Alle Daten':
@@ -1419,29 +1675,95 @@ class AnalyseApp(tk.Tk):
         else:
             monate = int(monate_str.split()[0])
         
-        # Berechne und zeige Zeitraum
-        if monate is None:
-            self.lager_zeitraum_label.config(text='')
+        # Finde das letzte Datum in den Daten für korrekte Zeitraum-Anzeige
+        alle_daten_iso = [r.get('abgabe_iso', '') for r in self.data if r.get('abgabe_iso')]
+        if alle_daten_iso:
+            letztes_datum_str = max(alle_daten_iso)
+            erstes_datum_str = min(alle_daten_iso)
+            letztes_datum = datetime.strptime(letztes_datum_str, '%Y-%m-%d')
+            erstes_datum = datetime.strptime(erstes_datum_str, '%Y-%m-%d')
         else:
-            heute = datetime.now()
-            von_datum = heute - timedelta(days=monate * 30.44)
+            letztes_datum = datetime.now()
+            erstes_datum = datetime.now()
+        
+        # Berechne und zeige Zeitraum inkl. Anzahl Monate
+        gesamt_monate = max(1, ((letztes_datum.year - erstes_datum.year) * 12 + 
+                                letztes_datum.month - erstes_datum.month) + 1)
+        if monate is None:
             self.lager_zeitraum_label.config(
-                text=f"({von_datum.strftime('%d.%m.%Y')} - {heute.strftime('%d.%m.%Y')})"
+                text=f"Daten: {erstes_datum.strftime('%d.%m.%Y')} - {letztes_datum.strftime('%d.%m.%Y')} ({gesamt_monate} Monate)"
+            )
+        else:
+            von_datum = letztes_datum - timedelta(days=monate * 30.44)
+            self.lager_zeitraum_label.config(
+                text=f"({von_datum.strftime('%d.%m.%Y')} - {letztes_datum.strftime('%d.%m.%Y')})"
             )
         
         # Nur einmal berechnen!
         alle_analyse = self.statistik.get_lagerhaltung_analyse(monate=monate)
         
+        # Zusätzliche Filter anwenden
+        try:
+            min_verkaeufe = int(self.lager_min_verkaeufe_var.get() or 0)
+        except ValueError:
+            min_verkaeufe = 0
+        try:
+            min_umsatz = float(self.lager_min_umsatz_var.get() or 0)
+        except ValueError:
+            min_umsatz = 0
+        try:
+            min_kunden = int(self.lager_min_kunden_var.get() or 0)
+        except ValueError:
+            min_kunden = 0
+        try:
+            min_monatsprozent = float(self.lager_min_monatsprozent_var.get() or 0)
+        except ValueError:
+            min_monatsprozent = 0
+        
+        # Produkt-Filter (kann mehrere Begriffe kommagetrennt enthalten)
+        produkt_filter_text = self.lager_produkt_var.get().strip()
+        produkt_filter_liste = []
+        if produkt_filter_text:
+            # Teile nach Komma und bereinige
+            produkt_filter_liste = [p.strip().upper() for p in produkt_filter_text.split(',') if p.strip()]
+        
+        # Wende zusätzliche Filter an
+        gefiltert = []
+        for a in alle_analyse:
+            if a['anzahl_verkäufe'] < min_verkaeufe:
+                continue
+            if a.get('monatsdurchschnitt_umsatz', 0) < min_umsatz:
+                continue
+            if a.get('anzahl_kunden', 0) < min_kunden:
+                continue
+            if a.get('lagerfaehigkeit_prozent', 0) < min_monatsprozent:
+                continue
+            # Produkt-Filter anwenden (Textsuche in Bezeichnung)
+            if produkt_filter_liste:
+                bez = a.get('bezeichnung', '').upper()
+                # Prüfe ob einer der Suchbegriffe in der Bezeichnung vorkommt
+                gefunden = False
+                for suchbegriff in produkt_filter_liste:
+                    if suchbegriff in bez:
+                        gefunden = True
+                        break
+                if not gefunden:
+                    continue
+            gefiltert.append(a)
+        
+        alle_analyse = gefiltert
+        
         # Statistiken berechnen
         lohnend = sum(1 for a in alle_analyse if 'Lohnend' in a['kategorie'])
         grenzwertig = sum(1 for a in alle_analyse if 'Grenzwertig' in a['kategorie'])
         nicht_lohnend = sum(1 for a in alle_analyse if 'Nicht lohnend' in a['kategorie'])
+        lagerfaehig_count = sum(1 for a in alle_analyse if a.get('lagerfaehig', '').startswith('✅'))
         
         self.lager_stats_label.config(
-            text=f"✅ Lohnend: {lohnend}  |  ⚠️ Grenzwertig: {grenzwertig}  |  ❌ Nicht lohnend: {nicht_lohnend}"
+            text=f"Gesamt: {len(alle_analyse)}  |  ✅ Lohnend: {lohnend}  |  ⚠️ Grenzwertig: {grenzwertig}  |  ❌ Nicht lohnend: {nicht_lohnend}  |  📦 Lagerfähig: {lagerfaehig_count}"
         )
         
-        # Filter anwenden
+        # Kategorie-Filter anwenden
         filter_val = self.lager_filter_var.get()
         if filter_val == 'nur lohnend':
             analyse = [a for a in alle_analyse if 'Lohnend' in a['kategorie']]
@@ -1449,6 +1771,8 @@ class AnalyseApp(tk.Tk):
             analyse = [a for a in alle_analyse if 'Grenzwertig' in a['kategorie']]
         elif filter_val == 'nur nicht lohnend':
             analyse = [a for a in alle_analyse if 'Nicht lohnend' in a['kategorie']]
+        elif filter_val == 'nur lagerfähig':
+            analyse = [a for a in alle_analyse if a.get('lagerfaehig', '').startswith('✅')]
         else:
             analyse = alle_analyse
         
@@ -1464,17 +1788,32 @@ class AnalyseApp(tk.Tk):
             else:
                 tag = 'nicht_lohnend'
             
+            # Freq./Mon.: Verkaufsfrequenz pro aktivem Monat
+            anz_verkaufsmonate = item.get('anzahl_verkaufsmonate', 1)
+            if anz_verkaufsmonate and anz_verkaufsmonate > 0:
+                freq_pro_mon = item['anzahl_verkäufe'] / anz_verkaufsmonate
+            else:
+                freq_pro_mon = item['anzahl_verkäufe']
+            
+            # Stk./Mon.: Stückzahl (Menge) pro Monat (über alle Monate)
+            zeitraum_monate = item.get('zeitraum_monate', 1)
+            if zeitraum_monate and zeitraum_monate > 0:
+                stueck_pro_mon = item['gesamtmenge'] / zeitraum_monate
+            else:
+                stueck_pro_mon = item['gesamtmenge']
+            
             self.lager_tree.insert('', 'end', values=(
                 item['teilenummer'],
                 item['bezeichnung'],
-                tage_str,
                 item['anzahl_verkäufe'],
+                f"{freq_pro_mon:.1f}",
+                f"{stueck_pro_mon:.1f}",
                 item.get('anzahl_kunden', '-'),
+                item.get('lagerfaehig', '-'),
                 f"{item['monatsdurchschnitt_menge']:.1f}",
                 f"{item['monatsdurchschnitt_umsatz']:.0f}",
-                f"{item.get('prognose_3_monate', 0):.1f}",
+                tage_str,
                 item.get('trend', '-'),
-                item.get('saisonalität', '-'),
                 item['kategorie'],
                 item['empfehlung'],
             ), tags=(tag,))
@@ -1546,6 +1885,101 @@ class AnalyseApp(tk.Tk):
                     item.get('anzahl_kunden', 0),
                 ))
 
+    def _autocomplete_produkt(self, event=None):
+        """Zeigt passende Vorschläge beim Tippen im Produkt-Feld."""
+        if not hasattr(self, 'alle_produkte_liste') or not self.alle_produkte_liste:
+            return
+        
+        # Hole aktuellen Text
+        current_text = self.lager_produkt_var.get().strip().upper()
+        
+        # Wenn leer, zeige alle
+        if not current_text:
+            self.lager_produkt_entry['values'] = self.alle_produkte_liste
+            return
+        
+        # Finde den letzten Begriff (nach Komma)
+        if ',' in current_text:
+            last_term = current_text.split(',')[-1].strip()
+        else:
+            last_term = current_text
+        
+        if not last_term:
+            self.lager_produkt_entry['values'] = self.alle_produkte_liste
+            return
+        
+        # Filtere passende Produkte
+        gefiltert = [p for p in self.alle_produkte_liste if last_term in p.upper()]
+        
+        if gefiltert:
+            self.lager_produkt_entry['values'] = gefiltert
+            # Öffne Dropdown wenn Ergebnisse vorhanden
+            if len(gefiltert) <= 10 and event and event.keysym not in ('Return', 'Tab', 'Escape', 'Down', 'Up'):
+                self.lager_produkt_entry.event_generate('<Down>')
+
+    def _on_produkt_keyrelease(self, event=None):
+        """Wird bei Tastendruck im Produkt-Feld aufgerufen - Autocomplete + verzögerte Aktualisierung."""
+        self._autocomplete_produkt(event)
+        # Bei Enter sofort aktualisieren, sonst verzögert
+        if event and event.keysym == 'Return':
+            self._update_lagerhaltung()
+        else:
+            self._delayed_update_lagerhaltung()
+    
+    def _on_produkt_selected(self, event=None):
+        """Wird aufgerufen wenn ein Produkt aus dem Dropdown ausgewählt wird."""
+        selected = self.lager_produkt_var.get()
+        if selected and '(' in selected:
+            # Extrahiere nur den Produktnamen (ohne Anzahl)
+            produkt_name = selected.split(' (')[0].strip()
+            self.lager_produkt_var.set(produkt_name)
+    
+    def _on_produkt_selected_and_update(self, event=None):
+        """Wird aufgerufen wenn ein Produkt aus dem Dropdown ausgewählt wird - mit Aktualisierung."""
+        self._on_produkt_selected(event)
+        self._update_lagerhaltung()
+
+    def _clear_produkt_filter(self):
+        """Löscht den Produkt-Filter."""
+        self.lager_produkt_var.set('')
+        if self.alle_produkte_liste:
+            self.lager_produkt_entry['values'] = self.alle_produkte_liste
+
+    def _clear_produkt_filter_and_update(self):
+        """Löscht den Produkt-Filter und aktualisiert die Liste."""
+        self._clear_produkt_filter()
+        self._update_lagerhaltung()
+
+    def _delayed_update_lagerhaltung(self):
+        """Verzögerte Aktualisierung um nicht bei jedem Tastendruck zu aktualisieren."""
+        # Abbrechen falls bereits ein Timer läuft
+        if hasattr(self, '_update_timer') and self._update_timer:
+            self.after_cancel(self._update_timer)
+        # Neuen Timer starten (300ms Verzögerung)
+        self._update_timer = self.after(300, self._update_lagerhaltung)
+
+    def _init_produkt_liste(self):
+        """Initialisiert die Produktliste für Autocomplete nach dem Laden."""
+        if not self.data:
+            return
+        
+        # Zähle Produkte nach Kategorie
+        produkt_zaehler = {}
+        for record in self.data:
+            bez = record.get('bezeichnung', '').strip()
+            if bez:
+                erste_worte = bez.split()[0] if bez.split() else bez
+                key = erste_worte.upper()
+                produkt_zaehler[key] = produkt_zaehler.get(key, 0) + 1
+        
+        # Erstelle Liste mit Anzahl in Klammern, sortiert nach Anzahl
+        self.alle_produkte_liste = [f"{name} ({count})" for name, count in 
+                                     sorted(produkt_zaehler.items(), key=lambda x: -x[1])]
+        
+        # Setze die Werte in die Combobox
+        if hasattr(self, 'lager_produkt_entry'):
+            self.lager_produkt_entry['values'] = self.alle_produkte_liste
+
     def _search_lager_list(self):
         """Filtert die Lagerhaltungs-Liste nach Suchbegriff."""
         if not self.statistik:
@@ -1590,17 +2024,32 @@ class AnalyseApp(tk.Tk):
                 else:
                     tag = 'nicht_lohnend'
                 
+                # Freq./Mon.: Verkaufsfrequenz pro aktivem Monat
+                anz_verkaufsmonate = item.get('anzahl_verkaufsmonate', 1)
+                if anz_verkaufsmonate and anz_verkaufsmonate > 0:
+                    freq_pro_mon = item['anzahl_verkäufe'] / anz_verkaufsmonate
+                else:
+                    freq_pro_mon = item['anzahl_verkäufe']
+                
+                # Stk./Mon.: Stückzahl (Menge) pro Monat (über alle Monate)
+                zeitraum_monate = item.get('zeitraum_monate', 1)
+                if zeitraum_monate and zeitraum_monate > 0:
+                    stueck_pro_mon = item['gesamtmenge'] / zeitraum_monate
+                else:
+                    stueck_pro_mon = item['gesamtmenge']
+                
                 self.lager_tree.insert('', 'end', values=(
                     item['teilenummer'],
                     item['bezeichnung'],
-                    tage_str,
                     item['anzahl_verkäufe'],
+                    f"{freq_pro_mon:.1f}",
+                    f"{stueck_pro_mon:.1f}",
                     item.get('anzahl_kunden', '-'),
+                    item.get('lagerfaehig', '-'),
                     f"{item['monatsdurchschnitt_menge']:.1f}",
                     f"{item['monatsdurchschnitt_umsatz']:.0f}",
-                    f"{item.get('prognose_3_monate', 0):.1f}",
+                    tage_str,
                     item.get('trend', '-'),
-                    item.get('saisonalität', '-'),
                     item['kategorie'],
                     item['empfehlung'],
                 ), tags=(tag,))
