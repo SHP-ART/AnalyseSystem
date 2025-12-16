@@ -4,7 +4,7 @@
 Teilenummer-Analysesystem (erweitert)
 - Plattformübergreifend (Windows/macOS)
 - Fortschrittsanzeige beim Import großer Dateien
-- Optionaler SQLite-Modus für sehr große Datenmengen
+- SQLite-Datenbank für performante Datenverarbeitung
 - Grafische Auswertungen & Zeitraum-Filter
 """
 
@@ -716,7 +716,29 @@ class TeilenummerStatistik:
                 'kategorie': kategorie,
                 'empfehlung': empfehlung,
             })
-        
+
+        # ═══════════════════════════════════════════════════════════════
+        # ABC-ANALYSE (nach Pareto-Prinzip)
+        # ═══════════════════════════════════════════════════════════════
+        # Sortiere nach Umsatz (höchster zuerst)
+        ergebnis_sortiert = sorted(ergebnis, key=lambda x: x['gesamtumsatz'], reverse=True)
+        gesamt_umsatz_alle = sum(item['gesamtumsatz'] for item in ergebnis)
+
+        kumulativ_umsatz = 0
+        kumulativ_prozent_teile = 0
+        for i, item in enumerate(ergebnis_sortiert):
+            kumulativ_umsatz += item['gesamtumsatz']
+            kumulativ_prozent_teile = ((i + 1) / len(ergebnis_sortiert)) * 100 if ergebnis_sortiert else 0
+            kumulativ_prozent_umsatz = (kumulativ_umsatz / gesamt_umsatz_alle * 100) if gesamt_umsatz_alle > 0 else 0
+
+            # ABC-Klassifizierung nach Pareto
+            if kumulativ_prozent_umsatz <= 80:
+                item['abc'] = '🅰️'  # A-Teile: Top 20% machen 80% Umsatz
+            elif kumulativ_prozent_umsatz <= 95:
+                item['abc'] = '🅱️'  # B-Teile: Nächste 30% machen 15% Umsatz
+            else:
+                item['abc'] = '🅲️'  # C-Teile: Restliche 50% machen 5% Umsatz
+
         return sorted(ergebnis, key=lambda x: x['durchschnitt_tage'] or 9999)
 
     def _berechne_trend(self, verkäufe):
@@ -926,6 +948,27 @@ class TeilenummerStatistik:
                 'kategorie': kategorie,
                 'empfehlung': empfehlung,
             })
+
+        # ═══════════════════════════════════════════════════════════════
+        # ABC-ANALYSE (nach Pareto-Prinzip)
+        # ═══════════════════════════════════════════════════════════════
+        # Sortiere nach Umsatz (höchster zuerst)
+        ergebnis_sortiert = sorted(ergebnis, key=lambda x: x['gesamtumsatz'], reverse=True)
+        gesamt_umsatz_alle = sum(item['gesamtumsatz'] for item in ergebnis)
+
+        kumulativ_umsatz = 0
+        for i, item in enumerate(ergebnis_sortiert):
+            kumulativ_umsatz += item['gesamtumsatz']
+            kumulativ_prozent_umsatz = (kumulativ_umsatz / gesamt_umsatz_alle * 100) if gesamt_umsatz_alle > 0 else 0
+
+            # ABC-Klassifizierung nach Pareto
+            if kumulativ_prozent_umsatz <= 80:
+                item['abc'] = '🅰️'  # A-Teile: Top 20% machen 80% Umsatz
+            elif kumulativ_prozent_umsatz <= 95:
+                item['abc'] = '🅱️'  # B-Teile: Nächste 30% machen 15% Umsatz
+            else:
+                item['abc'] = '🅲️'  # C-Teile: Restliche 50% machen 5% Umsatz
+
         return ergebnis
 
 
@@ -1043,9 +1086,38 @@ class AnalyseApp(tk.Tk):
         self.filter_params = {'type': 'alle', 'value': None}
         self.sqlite_store: SQLiteDataStore | None = None
         self.alle_produkte_liste = []  # Für Autocomplete
+        self.lagerbestand_data = {}  # Lagerbestand: {teilenummer: {bestand, verfuegbar, upe, ...}}
 
         self._build_ui()
         self._build_menu()
+
+    def _show_auto_close_info(self, title, message, duration=3000):
+        """Zeigt eine Info-Nachricht, die sich automatisch nach duration ms schließt."""
+        popup = tk.Toplevel(self)
+        popup.title(title)
+        popup.geometry("400x150")
+        popup.resizable(False, False)
+
+        # Zentriere das Fenster über dem Hauptfenster
+        popup.transient(self)
+        popup.grab_set()
+
+        # Icon und Nachricht
+        frame = ttk.Frame(popup, padding=20)
+        frame.pack(fill='both', expand=True)
+
+        # Info-Icon (ℹ️) und Text
+        ttk.Label(frame, text="ℹ️", font=('Segoe UI', 32)).pack(pady=(0, 10))
+        ttk.Label(frame, text=message, wraplength=350, justify='center', font=('Segoe UI', 10)).pack()
+
+        # Automatisches Schließen nach duration ms
+        popup.after(duration, popup.destroy)
+
+        # Position zentrieren
+        popup.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - (popup.winfo_width() // 2)
+        y = self.winfo_y() + (self.winfo_height() // 2) - (popup.winfo_height() // 2)
+        popup.geometry(f"+{x}+{y}")
 
     # --- UI ----------------------------------------------------------------
     def _build_ui(self):
@@ -1057,26 +1129,18 @@ class AnalyseApp(tk.Tk):
         main.rowconfigure(3, weight=1)
 
         # Datei + Speicherwahl
-        file_frame = ttk.LabelFrame(main, text='Datei', padding='5')
+        file_frame = ttk.LabelFrame(main, text='Dateien laden', padding='5')
         file_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
         file_frame.columnconfigure(2, weight=1)
 
-        ttk.Button(file_frame, text='Datei öffnen...', command=self._open_file).grid(row=0, column=0, padx=(0, 10))
+        ttk.Button(file_frame, text='📊 Verkaufsdaten...', command=self._open_file).grid(row=0, column=0, padx=(0, 5))
+        ttk.Button(file_frame, text='📦 Lagerbestand...', command=self._open_lagerbestand_file).grid(row=0, column=1, padx=(0, 15))
 
-        ttk.Label(file_frame, text='Speicher:').grid(row=0, column=1)
-        self.storage_var = tk.StringVar(value='memory')
-        display_values = ['In-Memory (schnell)', 'SQLite (große Dateien)']
-        self.storage_map = {
-            'In-Memory (schnell)': 'memory',
-            'SQLite (große Dateien)': 'sqlite',
-        }
-        storage_combo = ttk.Combobox(file_frame, values=display_values, state='readonly', width=22)
-        storage_combo.current(0)
-        storage_combo.bind('<<ComboboxSelected>>', lambda e: self.storage_var.set(self.storage_map[storage_combo.get()]))
-        storage_combo.grid(row=0, column=2, padx=(0, 10), sticky='w')
+        # Immer SQLite verwenden
+        self.storage_var = tk.StringVar(value='sqlite')
 
-        self.file_label = ttk.Label(file_frame, text='Keine Datei geladen')
-        self.file_label.grid(row=0, column=3, sticky='w')
+        self.file_label = ttk.Label(file_frame, text='Keine Dateien geladen')
+        self.file_label.grid(row=0, column=2, sticky='w')
 
         # Zeitraum-Filter
         filter_frame = ttk.LabelFrame(main, text='Zeitraum-Filter', padding='5')
@@ -1110,6 +1174,7 @@ class AnalyseApp(tk.Tk):
 
         self._build_top_tab()
         self._build_lagerhaltung_tab()
+        self._build_lagerabbau_tab()
         self._build_chart_tab()
         self._build_time_tab()
         self._build_all_data_tab()
@@ -1176,8 +1241,8 @@ class AnalyseApp(tk.Tk):
         info_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
         
         info_text = (
-            "Spalten: 'Freq./Mon.'=Verkäufe÷Aktive Monate | 'Stk./Mon.'=Stückzahl÷Gesamtmonate | "
-            "'Lagerfähig'=✅ bei ≥80% der Monate mit Verkauf | 💡 Maus 3 Sek. auf Spalte = Tooltip"
+            "Prognose: 🔴 Zu wenig (<2 Mon.) | ✅ OK (2-12 Mon.) | ⚠️ Zu viel (>12 Mon.) | "
+            "💡 Maus 3 Sek. auf Spalte = Tooltip"
         )
         ttk.Label(info_frame, text=info_text, wraplength=1200).grid(row=0, column=0, sticky='w')
         
@@ -1252,30 +1317,33 @@ class AnalyseApp(tk.Tk):
         self.lager_stats_label = ttk.Label(control2, text='')
         self.lager_stats_label.grid(row=0, column=10, padx=(20, 0), sticky='w')
         
-        # Tabelle
-        columns = ('teilenummer', 'bezeichnung', 'verkäufe', 'monate', 'verk_mon', 'kunden', 'lagerfaehig', 'ø_menge', 'ø_umsatz', 'tage', 'trend', 'kategorie', 'empfehlung')
+        # Tabelle mit Lagerbestand-Spalten
+        columns = ('teilenummer', 'bezeichnung', 'abc', 'bestand', 'umschlag', 'bestellpunkt', 'reichweite', 'prognose', 'verkäufe', 'verk_mon', 'kunden', 'lagerfaehig', 'ø_umsatz', 'trend', 'kategorie', 'empfehlung')
         self.lager_tree = ttk.Treeview(frame, columns=columns, show='headings')
         headings = {
             'teilenummer': 'Teilenummer',
             'bezeichnung': 'Bezeichnung',
+            'abc': 'ABC',
+            'bestand': 'Bestand',
+            'umschlag': 'Umschlag',
+            'bestellpunkt': 'Status',
+            'reichweite': 'Reichweite',
+            'prognose': 'Prognose',
             'verkäufe': 'Verkäufe',
-            'monate': 'Freq./Mon.',
             'verk_mon': 'Stk./Mon.',
             'kunden': 'Kunden',
             'lagerfaehig': 'Lagerfähig',
-            'ø_menge': 'Ø Menge/Mon.',
             'ø_umsatz': 'Ø €/Mon.',
-            'tage': 'Ø Tage zw.',
             'trend': 'Trend',
             'kategorie': 'Kategorie',
             'empfehlung': 'Empfehlung',
         }
         widths = {
-            'teilenummer': 100, 'bezeichnung': 180, 'verkäufe': 55, 
-            'monate': 50, 'verk_mon': 70, 'kunden': 50, 'lagerfaehig': 70, 'ø_menge': 75, 'ø_umsatz': 70,
-            'tage': 65, 'trend': 60, 'kategorie': 90, 'empfehlung': 100
+            'teilenummer': 100, 'bezeichnung': 160, 'abc': 35, 'bestand': 55, 'umschlag': 60, 'bestellpunkt': 50,
+            'reichweite': 65, 'prognose': 80, 'verkäufe': 55, 'verk_mon': 60, 'kunden': 50,
+            'lagerfaehig': 65, 'ø_umsatz': 65, 'trend': 50, 'kategorie': 85, 'empfehlung': 95
         }
-        aligns = {'verkäufe': tk.E, 'monate': tk.CENTER, 'verk_mon': tk.E, 'kunden': tk.E, 'ø_menge': tk.E, 'ø_umsatz': tk.E, 'tage': tk.E}
+        aligns = {'abc': tk.CENTER, 'bestand': tk.E, 'umschlag': tk.E, 'bestellpunkt': tk.CENTER, 'reichweite': tk.CENTER, 'verkäufe': tk.E, 'verk_mon': tk.E, 'kunden': tk.E, 'ø_umsatz': tk.E}
         for col in columns:
             self.lager_tree.heading(col, text=headings[col], command=lambda c=col: self._sort_treeview(self.lager_tree, c, False))
             self.lager_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
@@ -1289,14 +1357,17 @@ class AnalyseApp(tk.Tk):
         tooltip_texte = {
             'teilenummer': 'Die Artikelnummer des Teils aus dem DMS-System.',
             'bezeichnung': 'Die Bezeichnung/Beschreibung des Artikels.',
+            'abc': 'ABC-Analyse (Pareto-Prinzip):\n🅰️ A-Teile = Top 20% der Teile machen 80% des Umsatzes\n    → Hohe Priorität, immer verfügbar halten\n🅱️ B-Teile = Nächste 30% machen 15% des Umsatzes\n    → Mittlere Priorität, regelmäßig prüfen\n🅲️ C-Teile = Restliche 50% machen 5% des Umsatzes\n    → Niedrige Priorität, ggf. abbauen',
+            'bestand': 'Aktuelle Lagermenge aus Lagerbestand-Datei.\n- = Keine Lagerbestand-Datei geladen',
+            'umschlag': 'Umschlagshäufigkeit (pro Jahr):\nBerechnung = Jahresverkäufe ÷ Ø Bestand\n🟢 >6/Jahr = Fast-Mover (sehr gut)\n🟡 2-6/Jahr = Normal-Mover (OK)\n🔴 <2/Jahr = Slow-Mover (kritisch)',
+            'bestellpunkt': 'Bestellstatus:\n🟢 = Bestand OK\n🟡 = Nahe Bestellpunkt, bald bestellen\n🔴 = Unter Bestellpunkt, jetzt bestellen!\n⚪ = Kein Bestand/Bestellpunkt',
+            'reichweite': 'Wie lange reicht der Bestand bei aktuellem Absatz?\nBerechnung: Bestand ÷ Stk./Mon.\nBeispiel: 12 Stück ÷ 2 Stk./Mon. = 6 Mon.',
+            'prognose': 'Lagerprognose basierend auf Reichweite:\n🔴 Zu wenig = <2 Monate Reichweite\n✅ OK = 2-12 Monate Reichweite\n⚠️ Zu viel = >12 Monate Reichweite\n❌ Kein Abverkauf = Keine Verkäufe',
             'verkäufe': 'Gesamtanzahl aller Verkäufe im gewählten Zeitraum.',
-            'monate': 'Monatliche Verkaufsfrequenz.\nBerechnung: Anzahl Verkäufe ÷ Aktive Monate\nBeispiel: 6 Verkäufe in 3 aktiven Monaten = 2.0\nZeigt wie oft pro Monat durchschnittlich verkauft wird.',
             'verk_mon': 'Durchschnittliche STÜCKZAHL pro Monat.\nBerechnung: Gesamtmenge ÷ Gesamtmonate\nZeigt wie viele Teile im Schnitt pro Monat verkauft werden.',
             'kunden': 'Anzahl verschiedener Kunden, die dieses Teil gekauft haben.',
             'lagerfaehig': 'Bewertung der Lagerfähigkeit:\n✅ = ≥80% der Monate mit Verkauf (sehr lagerfähig)\n⚠️ = 50-79% der Monate (bedingt lagerfähig)\n❌ = <50% der Monate (wenig lagerfähig)',
-            'ø_menge': 'Durchschnittlich verkaufte Stückzahl pro Monat\n(über den gesamten Zeitraum, nicht nur aktive Monate).',
             'ø_umsatz': 'Durchschnittlicher Umsatz in Euro pro Monat\n(über den gesamten Zeitraum).',
-            'tage': 'Durchschnittliche Anzahl Tage zwischen zwei Verkäufen.\nNiedrigere Werte = häufigere Verkäufe = bessere Lagerfähigkeit.',
             'trend': 'Verkaufsentwicklung der letzten Monate:\n📈 steigend = mehr Verkäufe\n➡️ stabil = gleichbleibend\n📉 fallend = weniger Verkäufe',
             'kategorie': 'Gesamtbewertung basierend auf allen Faktoren:\n🟢 Lohnend = Empfohlen für Lager\n🟡 Grenzwertig = Einzelfallentscheidung\n🔴 Nicht lohnend = Nicht für Lager empfohlen',
             'empfehlung': 'Konkrete Handlungsempfehlung für diesen Artikel\nbasierend auf der Analyse aller Verkaufsdaten.',
@@ -1308,6 +1379,157 @@ class AnalyseApp(tk.Tk):
         self.lager_tree.tag_configure('grenzwertig', background='#fff3cd')  # Hellgelb
         self.lager_tree.tag_configure('nicht_lohnend', background='#f8d7da')  # Hellrot
         
+        frame.rowconfigure(3, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+    def _build_lagerabbau_tab(self):
+        """Tab für Lagerabbau: Teile im Lager die nie verkauft wurden."""
+        frame = ttk.Frame(self.notebook, padding='2')
+        self.notebook.add(frame, text='🗑️ Lagerabbau')
+
+        # ═══════════════════════════════════════════════════════════════════
+        # QUICK-BUTTONS (Schnellfilter)
+        # ═══════════════════════════════════════════════════════════════════
+        quick_frame = ttk.LabelFrame(frame, text='⚡ Schnellfilter', padding='2')
+        quick_frame.grid(row=0, column=0, sticky='ew', pady=(0, 2))
+        
+        ttk.Button(quick_frame, text='🔴 Kritische (>500€ + >1J)', 
+                   command=self._quick_filter_kritisch).grid(row=0, column=0, padx=(0, 10))
+        ttk.Button(quick_frame, text='❌ Nie verkauft (0)', 
+                   command=self._quick_filter_nie_verkauft).grid(row=0, column=1, padx=(0, 10))
+        ttk.Button(quick_frame, text='💰 Top 20 Lagerwert', 
+                   command=self._quick_filter_top_wert).grid(row=0, column=2, padx=(0, 10))
+        ttk.Button(quick_frame, text='📅 Top 20 Lagerdauer', 
+                   command=self._quick_filter_top_dauer).grid(row=0, column=3, padx=(0, 10))
+        ttk.Button(quick_frame, text='⚠️ Alte Teile (>2 Jahre)', 
+                   command=self._quick_filter_alte_teile).grid(row=0, column=4, padx=(0, 10))
+        ttk.Button(quick_frame, text='🔄 Filter zurücksetzen', 
+                   command=self._quick_filter_reset).grid(row=0, column=5, padx=(0, 10))
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # FILTER-STEUERUNG Zeile 1
+        # ═══════════════════════════════════════════════════════════════════
+        control = ttk.Frame(frame)
+        control.grid(row=1, column=0, sticky='ew', pady=(0, 2))
+        
+        # Bezeichnung-Filter (Combobox mit Autocomplete wie bei Lagerhaltung)
+        ttk.Label(control, text='Bezeichnung:').grid(row=0, column=0)
+        self.abbau_bezeichnung_var = tk.StringVar(value='')
+        self.abbau_bezeichnung_entry = ttk.Combobox(control, textvariable=self.abbau_bezeichnung_var, width=30)
+        self.abbau_bezeichnung_entry.grid(row=0, column=1, padx=(5, 5))
+        self.abbau_bezeichnung_entry.bind('<KeyRelease>', self._on_abbau_bezeichnung_keyrelease)
+        self.abbau_bezeichnung_entry.bind('<<ComboboxSelected>>', lambda e: self._update_lagerabbau())
+        self.abbau_bezeichnung_entry.bind('<Return>', lambda e: self._update_lagerabbau())
+        self.abbau_bezeichnung_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        
+        ttk.Button(control, text='×', width=2, command=self._clear_abbau_bezeichnung_filter).grid(row=0, column=2, padx=(0, 15))
+        
+        # Teilenummer-Filter
+        ttk.Label(control, text='Suche (Nr./Bez.):').grid(row=0, column=3)
+        self.abbau_search_var = tk.StringVar()
+        self.abbau_search_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Entry(control, textvariable=self.abbau_search_var, width=18).grid(row=0, column=4, padx=(5, 15))
+        
+        ttk.Button(control, text='CSV Export', command=self._export_lagerabbau).grid(row=0, column=5)
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # FILTER-STEUERUNG Zeile 2 - Numerische Filter
+        # ═══════════════════════════════════════════════════════════════════
+        control2 = ttk.Frame(frame)
+        control2.grid(row=2, column=0, sticky='ew', pady=(0, 2))
+        
+        ttk.Label(control2, text='Min. Lagerwert €:').grid(row=0, column=0)
+        self.abbau_min_wert_var = tk.StringVar(value='0')
+        self.abbau_min_wert_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Spinbox(control2, from_=0, to=10000, increment=50, textvariable=self.abbau_min_wert_var, width=8).grid(row=0, column=1, padx=(5, 15))
+        
+        ttk.Label(control2, text='Min. Bestand:').grid(row=0, column=2)
+        self.abbau_min_bestand_var = tk.StringVar(value='1')
+        self.abbau_min_bestand_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Spinbox(control2, from_=0, to=100, textvariable=self.abbau_min_bestand_var, width=6).grid(row=0, column=3, padx=(5, 15))
+        
+        ttk.Label(control2, text='Min. Lagerdauer (Tage):').grid(row=0, column=4)
+        self.abbau_min_lagerdauer_var = tk.StringVar(value='0')
+        self.abbau_min_lagerdauer_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Spinbox(control2, from_=0, to=3650, increment=30, textvariable=self.abbau_min_lagerdauer_var, width=8).grid(row=0, column=5, padx=(5, 15))
+        
+        ttk.Label(control2, text='Max. Verkäufe:').grid(row=0, column=6)
+        self.abbau_max_verkaeufe_var = tk.StringVar(value='5')
+        self.abbau_max_verkaeufe_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Spinbox(control2, from_=0, to=100, textvariable=self.abbau_max_verkaeufe_var, width=6).grid(row=0, column=7, padx=(5, 15))
+        
+        ttk.Label(control2, text='Ziel-Reichweite:').grid(row=0, column=8)
+        self.abbau_ziel_reichweite_var = tk.StringVar(value='6 Monate')
+        self.abbau_ziel_reichweite_var.trace_add('write', lambda *args: self._delayed_update_lagerabbau())
+        ttk.Combobox(control2, textvariable=self.abbau_ziel_reichweite_var, 
+                     values=['3 Monate', '6 Monate', '9 Monate', '12 Monate'], 
+                     width=10, state='readonly').grid(row=0, column=9, padx=(5, 15))
+        
+        # Treffer-Info (wird in _update_lagerabbau gefüllt)
+        self.abbau_stats_label = ttk.Label(control2, text='', font=('Segoe UI', 9))
+        self.abbau_stats_label.grid(row=0, column=10, padx=(20, 0), sticky='w')
+        
+        # Treeview für Lagerabbau mit Prioritäts-Score und Aktions-Empfehlung
+        columns = ('prio', 'teilenummer', 'bezeichnung', 'abc', 'bestand', 'umschlag', 'bestellpunkt', 'verkaeufe', 'stueck_mon', 'reichweite', 'zielbestand', 'abbau', 'lagerwert', 'aktion')
+        self.abbau_tree = ttk.Treeview(frame, columns=columns, show='headings')
+
+        headings = {
+            'prio': 'Prio',
+            'teilenummer': 'Teilenummer',
+            'bezeichnung': 'Bezeichnung',
+            'abc': 'ABC',
+            'bestand': 'Bestand',
+            'umschlag': 'Umschl.',
+            'bestellpunkt': 'Best.',
+            'verkaeufe': 'Verk.',
+            'stueck_mon': 'Ø/Mon',
+            'reichweite': 'Reichw.',
+            'zielbestand': 'Ziel',
+            'abbau': 'Abbau',
+            'lagerwert': 'Wert €',
+            'aktion': 'Aktion',
+        }
+        widths = {
+            'prio': 35, 'teilenummer': 100, 'bezeichnung': 160, 'abc': 35, 'bestand': 50, 'umschlag': 50,
+            'bestellpunkt': 35, 'verkaeufe': 40, 'stueck_mon': 45, 'reichweite': 55, 'zielbestand': 40,
+            'abbau': 45, 'lagerwert': 60, 'aktion': 185
+        }
+        aligns = {'prio': tk.CENTER, 'abc': tk.CENTER, 'bestand': tk.E, 'umschlag': tk.E, 'bestellpunkt': tk.CENTER,
+                  'verkaeufe': tk.E, 'stueck_mon': tk.E, 'reichweite': tk.E, 'zielbestand': tk.E, 'abbau': tk.E, 'lagerwert': tk.E}
+        for col in columns:
+            self.abbau_tree.heading(col, text=headings[col], command=lambda c=col: self._sort_treeview(self.abbau_tree, c, False))
+            self.abbau_tree.column(col, width=widths[col], anchor=aligns.get(col, tk.W))
+        
+        self.abbau_tree.grid(row=3, column=0, sticky='nsew')
+        scrollbar = ttk.Scrollbar(frame, orient='vertical', command=self.abbau_tree.yview)
+        scrollbar.grid(row=3, column=1, sticky='ns')
+        self.abbau_tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Tooltips für Spaltenüberschriften
+        tooltip_texte = {
+            'prio': 'Priorität:\n🔴 ABBAU: Sofort (0 Verkäufe)\n🟠 ABBAU: Reduzieren\n🟡 ABBAU: Nicht nachbestellen\n🟢 OK',
+            'teilenummer': 'Die Artikelnummer des Teils.',
+            'bezeichnung': 'Die Bezeichnung/Beschreibung des Artikels.',
+            'abc': 'ABC-Analyse nach Pareto-Prinzip:\n🅰️ A-Teile: Top 20% → 80% Umsatz\n🅱️ B-Teile: 30% → 15% Umsatz\n🅲️ C-Teile: 50% → 5% Umsatz',
+            'bestand': 'Aktuelle Lagermenge.',
+            'umschlag': 'Umschlagshäufigkeit pro Jahr.\nUmschlag = Jahresverkauf / Bestand\nHöher = bessere Lagerdrehung',
+            'bestellpunkt': 'Bestellpunkt-Status:\n🟢 Grün: Bestand OK\n🟡 Gelb: Bald bestellen\n🔴 Rot: Jetzt bestellen\n⚪ Weiß: Keine Daten',
+            'verkaeufe': 'Anzahl der Verkäufe im gesamten Zeitraum.\n0 = Nie verkauft (Ladenhüter)',
+            'stueck_mon': 'Durchschnittlicher Monatsverbrauch.\nØ/Mon = Verkäufe / Anzahl Monate',
+            'reichweite': 'Wie lange reicht der Bestand?\nReichweite = Bestand / Ø Monatsverbrauch\n∞ = Kein Verbrauch',
+            'zielbestand': 'Optimaler Bestand basierend auf Ziel-Reichweite.\nZiel = Ø/Mon × Ziel-Monate',
+            'abbau': 'Empfohlene Abbau-Menge.\nAbbau = MAX(0, Bestand - Zielbestand)',
+            'lagerwert': 'Gebundenes Kapital: Bestand × UPE',
+            'aktion': 'Empfohlene Aktion:\n🔴 ABBAU: Sofort - Nie verkauft\n🟠 ABBAU: X Stk reduzieren\n🟡 Nicht nachbestellen (<3 Verk.)\n🟢 OK: Bestand passt',
+        }
+        TreeviewHeaderTooltip(self.abbau_tree, tooltip_texte, delay_ms=3000)
+        
+        # Farbliche Hervorhebung nach Aktion
+        self.abbau_tree.tag_configure('abbau_sofort', background='#f8d7da')  # Rot - sofort abbauen
+        self.abbau_tree.tag_configure('abbau_reduzieren', background='#ffeeba')  # Orange - reduzieren
+        self.abbau_tree.tag_configure('nicht_nachbestellen', background='#fff3cd')  # Gelb - nicht nachbestellen
+        self.abbau_tree.tag_configure('ok', background='#d4edda')  # Grün - OK
+
         frame.rowconfigure(3, weight=1)
         frame.columnconfigure(0, weight=1)
 
@@ -1427,7 +1649,8 @@ class AnalyseApp(tk.Tk):
         file_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label='Datei', menu=file_menu)
         shortcut = 'Cmd+O' if os.name == 'darwin' else 'Strg+O'
-        file_menu.add_command(label=f'Öffnen... ({shortcut})', command=self._open_file)
+        file_menu.add_command(label=f'Verkaufsdaten öffnen... ({shortcut})', command=self._open_file)
+        file_menu.add_separator()
         file_menu.add_command(label='Ergebnisse exportieren...', command=self._export_results)
         file_menu.add_command(label='Diagramm speichern...', command=self._save_chart)
         file_menu.add_separator()
@@ -1436,12 +1659,14 @@ class AnalyseApp(tk.Tk):
 
     # --- Datei laden ------------------------------------------------------
     def _open_file(self):
-        filetypes = [('Textdateien', '*.txt'), ('CSV-Dateien', '*.csv'), ('Alle Dateien', '*.*')]
-        filepath = filedialog.askopenfilename(title='Textdatei öffnen', filetypes=filetypes)
+        filetypes = [
+            ('Textdateien', '*.txt'),
+            ('Alle Dateien', '*.*')
+        ]
+        filepath = filedialog.askopenfilename(title='Verkaufsdaten öffnen', filetypes=filetypes)
         if not filepath:
             return
 
-        storage_mode = self.storage_var.get()
         self.status_label.config(text='Datei wird geladen...')
         self.update()
         
@@ -1452,37 +1677,25 @@ class AnalyseApp(tk.Tk):
         progress_ui = self._show_progress('Importiere Datei...') if use_progress else None
 
         try:
-            if storage_mode == 'sqlite':
-                if self.sqlite_store:
-                    self.sqlite_store.close()
-                self.sqlite_store = SQLiteDataStore()
-                progress_cb = (lambda done, total: self._update_progress(progress_ui, done, total)) if use_progress else None
-                metadata, _ = self.parser.parse_file(
-                    filepath,
-                    progress_callback=progress_cb,
-                    record_callback=self.sqlite_store.insert_record,
-                    store_records=False,
-                )
-                self.sqlite_store.finalize()
-                self.data = []
-                self.filtered_data = []
-                self.statistik = TeilenummerStatistik(db_store=self.sqlite_store)
-            else:
-                progress_cb = (lambda done, total: self._update_progress(progress_ui, done, total)) if use_progress else None
-                metadata, data = self.parser.parse_file(
-                    filepath,
-                    progress_callback=progress_cb,
-                    record_callback=None,
-                    store_records=True,
-                )
-                self.sqlite_store = None
-                self.data = data
-                self.filtered_data = data.copy()
-                self.statistik = TeilenummerStatistik(data=self.data)
+            # Immer SQLite verwenden
+            if self.sqlite_store:
+                self.sqlite_store.close()
+            self.sqlite_store = SQLiteDataStore()
+            progress_cb = (lambda done, total: self._update_progress(progress_ui, done, total)) if use_progress else None
+            metadata, _ = self.parser.parse_file(
+                filepath,
+                progress_callback=progress_cb,
+                record_callback=self.sqlite_store.insert_record,
+                store_records=False,
+            )
+            self.sqlite_store.finalize()
+            self.data = []
+            self.filtered_data = []
+            self.statistik = TeilenummerStatistik(db_store=self.sqlite_store)
 
             self.metadata = metadata
             self.current_file = filepath
-            self.file_label.config(text=Path(filepath).name)
+            self._update_file_label()
             self._update_meta_label()
             self._refresh_after_load()
             self.status_label.config(text=f"Geladen: {self.statistik.get_record_count()} Datensätze")
@@ -1492,6 +1705,168 @@ class AnalyseApp(tk.Tk):
         finally:
             if progress_ui:
                 self._close_progress(progress_ui)
+
+    def _open_lagerbestand_file(self):
+        """Lädt eine Lagerbestand-Datei (ausgabe.txt aus Loco-Soft)."""
+        filetypes = [
+            ('Textdateien', '*.txt'),
+            ('Alle Dateien', '*.*')
+        ]
+        filepath = filedialog.askopenfilename(
+            title='Lagerbestand öffnen (ausgabe.txt)',
+            filetypes=filetypes
+        )
+        if not filepath:
+            return
+        
+        self.status_label.config(text='Lagerbestand wird geladen...')
+        self.update()
+        
+        progress_ui = None
+        try:
+            # Zähle Zeilen für Fortschrittsbalken
+            total_lines = 0
+            encoding_found = None
+            for encoding in ['cp1252', 'utf-8', 'latin-1', 'iso-8859-1']:
+                try:
+                    with open(filepath, 'r', encoding=encoding) as f:
+                        total_lines = sum(1 for _ in f) - 1
+                    encoding_found = encoding
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if not encoding_found:
+                raise ValueError("Datei-Encoding konnte nicht erkannt werden")
+            
+            progress_ui = self._show_progress('Lagerbestand wird geladen...')
+            self.lagerbestand_data = {}
+            count = 0
+            
+            with open(filepath, 'r', encoding=encoding_found) as f:
+                # Header lesen
+                header = f.readline().strip().split('\t')
+                
+                # Spaltenindizes finden
+                idx = {}
+                for i, h in enumerate(header):
+                    h_clean = h.strip().lower()
+                    if 'et-nr' in h_clean:
+                        idx['teilenummer'] = i
+                    elif h_clean == 'et-bezeichnung':
+                        idx['bezeichnung'] = i
+                    elif h_clean == 'bestand':
+                        idx['bestand'] = i
+                    elif 'verfügbare menge' in h_clean or 'verfuegbare menge' in h_clean:
+                        idx['verfuegbar'] = i
+                    elif h_clean == 'upe':
+                        idx['upe'] = i
+                    elif 'verk. st. jahr' in h_clean:
+                        idx['verk_jahr'] = i
+                    elif 'verk. st. vorjahr' in h_clean:
+                        idx['verk_vorjahr'] = i
+                    elif h_clean == 'lager':
+                        idx['lager'] = i
+                    elif 'lagerdauer' in h_clean:
+                        idx['lagerdauer'] = i
+                
+                for line_num, line in enumerate(f, 1):
+                    parts = line.strip().split('\t')
+                    if len(parts) > 5:  # Mindestens 6 Spalten
+                        def parse_float(val):
+                            try:
+                                return float(val.replace(',', '.').strip())
+                            except:
+                                return 0.0
+                        
+                        def clean_teilenummer(tn):
+                            """Bereinigt Teilenummer von ='...' Format"""
+                            tn = tn.strip()
+                            if tn.startswith('="') and tn.endswith('"'):
+                                tn = tn[2:-1]
+                            return tn
+                        
+                        # Hole BEIDE Teilenummern (Spalte 0 = ET-Nr., Spalte 1 = Lieferant-ET-Nr.)
+                        et_nr = clean_teilenummer(parts[0]) if len(parts) > 0 else ''
+                        lieferant_et_nr = clean_teilenummer(parts[1]) if len(parts) > 1 else ''
+                        
+                        # Bestand aus Spalte 5 lesen
+                        bestand_idx = idx.get('bestand', 5)
+                        bestand_val = parts[bestand_idx] if bestand_idx < len(parts) else '0'
+                        
+                        lager_eintrag = {
+                            'bezeichnung': parts[idx.get('bezeichnung', 2)].strip() if idx.get('bezeichnung', 2) < len(parts) else '',
+                            'bestand': parse_float(bestand_val),
+                            'verfuegbar': parse_float(parts[idx.get('verfuegbar', 7)]) if idx.get('verfuegbar', 7) < len(parts) else 0,
+                            'upe': parse_float(parts[idx.get('upe', 8)]) if idx.get('upe', 8) < len(parts) else 0,
+                            'verk_jahr': parse_float(parts[idx.get('verk_jahr', 14)]) if idx.get('verk_jahr', 14) < len(parts) else 0,
+                            'verk_vorjahr': parse_float(parts[idx.get('verk_vorjahr', 15)]) if idx.get('verk_vorjahr', 15) < len(parts) else 0,
+                            'lager': parts[idx.get('lager', 4)].strip() if idx.get('lager', 4) < len(parts) else '',
+                            'lagerdauer': parse_float(parts[idx.get('lagerdauer', 21)]) if idx.get('lagerdauer', 21) < len(parts) else 0,
+                            'et_nr': et_nr,
+                            'lieferant_et_nr': lieferant_et_nr,
+                        }
+                        
+                        # Speichere unter ALLEN möglichen Schlüsseln für maximales Matching
+                        keys_to_store = set()
+                        
+                        # ET-Nr. (Spalte 0) - EAN/Barcode
+                        if et_nr:
+                            keys_to_store.add(et_nr)
+                            keys_to_store.add(et_nr.lstrip('0') or et_nr)
+                        
+                        # Lieferant-ET-Nr. (Spalte 1) - Hersteller-Teilenummer
+                        if lieferant_et_nr:
+                            keys_to_store.add(lieferant_et_nr)
+                            keys_to_store.add(lieferant_et_nr.lstrip('0') or lieferant_et_nr)
+                            # Auch mit führenden Nullen auf verschiedene Längen
+                            keys_to_store.add(lieferant_et_nr.zfill(10))
+                            keys_to_store.add(lieferant_et_nr.zfill(13))
+                        
+                        for key in keys_to_store:
+                            if key:
+                                self.lagerbestand_data[key] = lager_eintrag
+                        
+                        count += 1
+                    
+                    if line_num % 5000 == 0:
+                        self._update_progress(progress_ui, line_num, total_lines)
+            
+            self._close_progress(progress_ui)
+            progress_ui = None
+            
+            self._update_file_label()
+            self.status_label.config(text=f"Lagerbestand: {count:,} Teile geladen".replace(',', '.'))
+            
+            # Initialisiere Bezeichnungsliste für Lagerabbau-Autocomplete
+            self._init_abbau_bezeichnung_liste()
+            
+            # Aktualisiere Lagerhaltung-Tab wenn Verkaufsdaten vorhanden
+            if self.statistik:
+                self._update_lagerhaltung()
+            
+            # Aktualisiere Lagerabbau-Tab
+            self._update_lagerabbau()
+            
+            self._show_auto_close_info('Lagerbestand geladen',
+                f'{count:,} Teile aus Lagerbestand geladen.\n\n'.replace(',', '.') +
+                f'Die Lagerhaltung-Tabelle zeigt nun Bestand, Reichweite und Prognose.')
+                
+        except Exception as exc:
+            messagebox.showerror('Fehler', f'Lagerbestand konnte nicht geladen werden:\n{exc}')
+            self.status_label.config(text='Fehler beim Laden des Lagerbestands')
+        finally:
+            if progress_ui:
+                self._close_progress(progress_ui)
+
+    def _update_file_label(self):
+        """Aktualisiert das Label mit den geladenen Dateien."""
+        parts = []
+        if self.current_file:
+            parts.append(f"Verkauf: {Path(self.current_file).name}")
+        if self.lagerbestand_data:
+            parts.append(f"Lager: {len(self.lagerbestand_data):,} Teile".replace(',', '.'))
+        self.file_label.config(text=' | '.join(parts) if parts else 'Keine Dateien geladen')
 
     def _show_progress(self, title):
         window = tk.Toplevel(self)
@@ -1676,7 +2051,17 @@ class AnalyseApp(tk.Tk):
             monate = int(monate_str.split()[0])
         
         # Finde das letzte Datum in den Daten für korrekte Zeitraum-Anzeige
-        alle_daten_iso = [r.get('abgabe_iso', '') for r in self.data if r.get('abgabe_iso')]
+        alle_daten_iso = []
+        if self.sqlite_store:
+            # Hole Datumsbereich aus SQLite
+            min_max = self.statistik.get_date_range()
+            if min_max[0] and min_max[1]:
+                erstes_datum_str = min_max[0]
+                letztes_datum_str = min_max[1]
+                alle_daten_iso = [erstes_datum_str, letztes_datum_str]
+        else:
+            alle_daten_iso = [r.get('abgabe_iso', '') for r in self.data if r.get('abgabe_iso')]
+
         if alle_daten_iso:
             letztes_datum_str = max(alle_daten_iso)
             erstes_datum_str = min(alle_daten_iso)
@@ -1788,13 +2173,6 @@ class AnalyseApp(tk.Tk):
             else:
                 tag = 'nicht_lohnend'
             
-            # Freq./Mon.: Verkaufsfrequenz pro aktivem Monat
-            anz_verkaufsmonate = item.get('anzahl_verkaufsmonate', 1)
-            if anz_verkaufsmonate and anz_verkaufsmonate > 0:
-                freq_pro_mon = item['anzahl_verkäufe'] / anz_verkaufsmonate
-            else:
-                freq_pro_mon = item['anzahl_verkäufe']
-            
             # Stk./Mon.: Stückzahl (Menge) pro Monat (über alle Monate)
             zeitraum_monate = item.get('zeitraum_monate', 1)
             if zeitraum_monate and zeitraum_monate > 0:
@@ -1802,17 +2180,88 @@ class AnalyseApp(tk.Tk):
             else:
                 stueck_pro_mon = item['gesamtmenge']
             
+            # Lagerbestand-Daten holen (versuche verschiedene Formate)
+            teilenummer = item['teilenummer']
+            lager_info = self.lagerbestand_data.get(teilenummer, {})
+            
+            # Falls nicht gefunden, versuche ohne führende Nullen
+            if not lager_info:
+                tn_stripped = teilenummer.lstrip('0') or teilenummer
+                lager_info = self.lagerbestand_data.get(tn_stripped, {})
+            
+            # Falls immer noch nicht gefunden, versuche mit führenden Nullen (auf 13 Stellen)
+            if not lager_info:
+                tn_padded = teilenummer.zfill(13)
+                lager_info = self.lagerbestand_data.get(tn_padded, {})
+            
+            bestand = lager_info.get('bestand', 0) if lager_info else 0
+            
+            # Bestand und Reichweite berechnen
+            if self.lagerbestand_data:
+                bestand_str = f"{bestand:.0f}" if bestand > 0 else "0"
+                if stueck_pro_mon > 0 and bestand > 0:
+                    reichweite_monate = bestand / stueck_pro_mon
+                    reichweite_str = f"{reichweite_monate:.1f} Mon."
+                    # Prognose basierend auf Reichweite
+                    if reichweite_monate < 2:
+                        prognose = "🔴 Zu wenig"
+                    elif reichweite_monate <= 12:
+                        prognose = "✅ OK"
+                    else:
+                        prognose = "⚠️ Zu viel"
+                elif stueck_pro_mon == 0 and bestand > 0:
+                    reichweite_str = "∞"
+                    prognose = "❌ Kein Abverk."
+                else:
+                    reichweite_str = "-"
+                    prognose = "-" if bestand == 0 else "❌ Kein Abverk."
+            else:
+                bestand_str = "-"
+                reichweite_str = "-"
+                prognose = "-"
+
+            # ═══════════════════════════════════════════════════════════════
+            # UMSCHLAGSHÄUFIGKEIT (Turnover Rate)
+            # ═══════════════════════════════════════════════════════════════
+            # Berechnung: Jahresverkäufe / Durchschnittsbestand
+            if bestand > 0 and zeitraum_monate and zeitraum_monate > 0:
+                jahresverkauf = (item['gesamtmenge'] / zeitraum_monate) * 12
+                umschlagshaeufigkeit = jahresverkauf / bestand
+                umschlag_str = f"{umschlagshaeufigkeit:.1f}x"
+            else:
+                umschlag_str = "-"
+                umschlagshaeufigkeit = 0
+
+            # ═══════════════════════════════════════════════════════════════
+            # BESTELLPUNKT-EMPFEHLUNG
+            # ═══════════════════════════════════════════════════════════════
+            # Bestellpunkt = (Ø Tagesverbrauch × Lieferzeit) + Sicherheitsbestand
+            # Vereinfacht: Bestellpunkt = 2 Monate Verbrauch (annahme 1 Monat Lieferzeit + 1 Monat Sicherheit)
+            if stueck_pro_mon > 0 and bestand > 0:
+                bestellpunkt = stueck_pro_mon * 2  # 2 Monate als Bestellpunkt
+                if bestand < bestellpunkt:
+                    bestellpunkt_status = "🔴"  # Unter Bestellpunkt - jetzt bestellen!
+                elif bestand < bestellpunkt * 1.2:
+                    bestellpunkt_status = "🟡"  # Nahe Bestellpunkt - bald bestellen
+                else:
+                    bestellpunkt_status = "🟢"  # Bestand OK
+            else:
+                bestellpunkt_status = "⚪"  # Kein Bestand/Bestellpunkt
+
             self.lager_tree.insert('', 'end', values=(
                 item['teilenummer'],
                 item['bezeichnung'],
+                item.get('abc', '-'),
+                bestand_str,
+                umschlag_str,
+                bestellpunkt_status,
+                reichweite_str,
+                prognose,
                 item['anzahl_verkäufe'],
-                f"{freq_pro_mon:.1f}",
                 f"{stueck_pro_mon:.1f}",
                 item.get('anzahl_kunden', '-'),
                 item.get('lagerfaehig', '-'),
-                f"{item['monatsdurchschnitt_menge']:.1f}",
                 f"{item['monatsdurchschnitt_umsatz']:.0f}",
-                tage_str,
                 item.get('trend', '-'),
                 item['kategorie'],
                 item['empfehlung'],
@@ -1908,14 +2357,19 @@ class AnalyseApp(tk.Tk):
             self.lager_produkt_entry['values'] = self.alle_produkte_liste
             return
         
-        # Filtere passende Produkte
-        gefiltert = [p for p in self.alle_produkte_liste if last_term in p.upper()]
-        
+        # Filtere passende Produkte - erst nach Anfang, dann überall
+        startswith = [p for p in self.alle_produkte_liste if p.upper().startswith(last_term)]
+        contains = [p for p in self.alle_produkte_liste if p not in startswith and last_term in p.upper()]
+        gefiltert = startswith + contains
+
         if gefiltert:
             self.lager_produkt_entry['values'] = gefiltert
-            # Öffne Dropdown wenn Ergebnisse vorhanden
-            if len(gefiltert) <= 10 and event and event.keysym not in ('Return', 'Tab', 'Escape', 'Down', 'Up'):
-                self.lager_produkt_entry.event_generate('<Down>')
+            # Öffne Dropdown automatisch bei wenigen Ergebnissen
+            try:
+                if event and event.keysym not in ('Return', 'Tab', 'Escape', 'Down', 'Up', 'Left', 'Right'):
+                    self.lager_produkt_entry.event_generate('<Down>')
+            except:
+                pass
 
     def _on_produkt_keyrelease(self, event=None):
         """Wird bei Tastendruck im Produkt-Feld aufgerufen - Autocomplete + verzögerte Aktualisierung."""
@@ -1958,24 +2412,540 @@ class AnalyseApp(tk.Tk):
         # Neuen Timer starten (300ms Verzögerung)
         self._update_timer = self.after(300, self._update_lagerhaltung)
 
-    def _init_produkt_liste(self):
-        """Initialisiert die Produktliste für Autocomplete nach dem Laden."""
-        if not self.data:
+    def _delayed_update_lagerabbau(self):
+        """Verzögerte Aktualisierung für Lagerabbau-Tab."""
+        if hasattr(self, '_abbau_timer') and self._abbau_timer:
+            self.after_cancel(self._abbau_timer)
+        self._abbau_timer = self.after(300, self._update_lagerabbau)
+
+    def _init_abbau_bezeichnung_liste(self):
+        """Initialisiert die Bezeichnungsliste für Lagerabbau-Autocomplete."""
+        if not self.lagerbestand_data:
+            return
+
+        # Sammle alle vollständigen Bezeichnungen mit Gesamtbestand
+        bezeichnung_bestand = {}
+        for eintrag in self.lagerbestand_data.values():
+            bez = eintrag.get('bezeichnung', '').strip()
+            bestand = eintrag.get('bestand', 0)
+            if bez and bestand > 0:
+                # Verwende vollständige Bezeichnung als Key
+                bezeichnung_bestand[bez] = bezeichnung_bestand.get(bez, 0) + bestand
+
+        # Sortiere nach Bestand und erstelle Liste
+        sortiert = sorted(bezeichnung_bestand.items(), key=lambda x: -x[1])
+        self.abbau_bezeichnung_liste = [name for name, count in sortiert[:200]]
+
+        # Setze initiale Werte in Combobox
+        self.abbau_bezeichnung_entry['values'] = self.abbau_bezeichnung_liste
+
+    def _on_abbau_bezeichnung_keyrelease(self, event):
+        """Autocomplete für Bezeichnung im Lagerabbau-Tab."""
+        if not self.lagerbestand_data:
+            return
+
+        # Ignoriere spezielle Tasten
+        if event.keysym in ('Return', 'Tab', 'Escape', 'Up', 'Down', 'Left', 'Right'):
+            return
+
+        typed = self.abbau_bezeichnung_var.get().strip().upper()
+        if len(typed) < 1:
+            # Zeige vollständige Liste
+            if hasattr(self, 'abbau_bezeichnung_liste'):
+                self.abbau_bezeichnung_entry['values'] = self.abbau_bezeichnung_liste[:50]
+            return
+
+        # Filtere Liste basierend auf Eingabe
+        if hasattr(self, 'abbau_bezeichnung_liste'):
+            # Priorität 1: Beginnt mit Eingabe
+            startswith = [b for b in self.abbau_bezeichnung_liste if b.upper().startswith(typed)]
+
+            # Priorität 2: Ein Wort in der Bezeichnung beginnt mit Eingabe
+            word_startswith = [b for b in self.abbau_bezeichnung_liste
+                              if b not in startswith and
+                              any(word.upper().startswith(typed) for word in b.split())]
+
+            # Priorität 3: Enthält die Eingabe irgendwo
+            contains = [b for b in self.abbau_bezeichnung_liste
+                       if b not in startswith and b not in word_startswith and typed in b.upper()]
+
+            # Kombiniere die Ergebnisse in Prioritätsreihenfolge
+            gefiltert = startswith + word_startswith + contains
+            self.abbau_bezeichnung_entry['values'] = gefiltert[:30]
+
+    def _clear_abbau_bezeichnung_filter(self):
+        """Löscht den Bezeichnungs-Filter im Lagerabbau-Tab."""
+        self.abbau_bezeichnung_var.set('')
+        self._update_lagerabbau()
+
+    def _quick_filter_kritisch(self):
+        """Quick-Filter: Nur kritische Teile (>500€ UND >1 Jahr)."""
+        self.abbau_min_wert_var.set('500')
+        self.abbau_min_lagerdauer_var.set('365')
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('5')
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        self._update_lagerabbau()
+
+    def _quick_filter_nie_verkauft(self):
+        """Quick-Filter: Nur Teile die nie verkauft wurden (0 Verkäufe)."""
+        self.abbau_min_wert_var.set('0')
+        self.abbau_min_lagerdauer_var.set('0')
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('0')  # Nur 0 Verkäufe
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        self._update_lagerabbau()
+
+    def _quick_filter_top_wert(self):
+        """Quick-Filter: Top 20 nach Lagerwert."""
+        self.abbau_min_wert_var.set('0')
+        self.abbau_min_lagerdauer_var.set('0')
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('5')
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        self._abbau_sort_mode = 'lagerwert'
+        self._update_lagerabbau()
+
+    def _quick_filter_top_dauer(self):
+        """Quick-Filter: Top 20 nach Lagerdauer."""
+        self.abbau_min_wert_var.set('0')
+        self.abbau_min_lagerdauer_var.set('0')
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('5')
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        self._abbau_sort_mode = 'lagerdauer'
+        self._update_lagerabbau()
+
+    def _quick_filter_alte_teile(self):
+        """Quick-Filter: Teile älter als 2 Jahre."""
+        self.abbau_min_wert_var.set('0')
+        self.abbau_min_lagerdauer_var.set('730')  # 2 Jahre
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('5')
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        self._update_lagerabbau()
+
+    def _quick_filter_reset(self):
+        """Setzt alle Filter zurück."""
+        self.abbau_min_wert_var.set('0')
+        self.abbau_min_lagerdauer_var.set('0')
+        self.abbau_min_bestand_var.set('1')
+        self.abbau_max_verkaeufe_var.set('5')
+        self.abbau_bezeichnung_var.set('')
+        self.abbau_search_var.set('')
+        if hasattr(self, '_abbau_sort_mode'):
+            del self._abbau_sort_mode
+        self._update_lagerabbau()
+
+    def _export_lagerabbau(self):
+        """Exportiert die Lagerabbau-Tabelle als CSV."""
+        if not self.abbau_tree.get_children():
+            messagebox.showwarning('Export', 'Keine Daten zum Exportieren vorhanden.')
             return
         
+        filepath = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV Dateien', '*.csv'), ('Alle Dateien', '*.*')],
+            title='Lagerabbau exportieren'
+        )
+        if not filepath:
+            return
+        
+        try:
+            with open(filepath, 'w', encoding='utf-8-sig', newline='') as f:
+                # Header
+                columns = ('Priorität', 'Teilenummer', 'Bezeichnung', 'ABC', 'Bestand', 'Umschlag/Jahr', 'Bestellpunkt Status', 'Verkäufe', 'Ø/Mon', 'Reichweite', 'Zielbestand', 'Abbau', 'Lagerwert €', 'Aktion')
+                f.write(';'.join(columns) + '\n')
+
+                # Daten
+                for item in self.abbau_tree.get_children():
+                    values = self.abbau_tree.item(item, 'values')
+                    # Konvertiere Emojis zu Text für bessere Excel-Kompatibilität
+                    values_converted = list(values)
+                    # ABC-Spalte (Index 3)
+                    if len(values_converted) > 3:
+                        values_converted[3] = str(values_converted[3]).replace('🅰️', 'A').replace('🅱️', 'B').replace('🅲️', 'C')
+                    # Bestellpunkt-Spalte (Index 6)
+                    if len(values_converted) > 6:
+                        bp = str(values_converted[6])
+                        if '🔴' in bp:
+                            values_converted[6] = 'Rot - Jetzt bestellen'
+                        elif '🟡' in bp:
+                            values_converted[6] = 'Gelb - Bald bestellen'
+                        elif '🟢' in bp:
+                            values_converted[6] = 'Grün - Bestand OK'
+                        elif '⚪' in bp:
+                            values_converted[6] = 'Keine Daten'
+                    f.write(';'.join(str(v) for v in values_converted) + '\n')
+            
+            self._show_auto_close_info('Export erfolgreich', f'Daten wurden nach {filepath} exportiert.')
+        except Exception as e:
+            messagebox.showerror('Export-Fehler', f'Fehler beim Export: {e}')
+
+    def _update_lagerabbau(self):
+        """Aktualisiert die Lagerabbau-Tabelle mit nie verkauften Teilen."""
+        if not self.lagerbestand_data:
+            self.abbau_stats_label.config(text='⚠️ Bitte zuerst Lagerbestand laden!')
+            return
+        
+        # Treeview leeren
+        for item in self.abbau_tree.get_children():
+            self.abbau_tree.delete(item)
+        
+        # Sammle alle verkauften Teilenummern MIT Anzahl der Verkäufe
+        verkaufs_zaehler = {}  # Zählt Anzahl der Verkäufe pro Teilenummer
+
+        # Hole Daten aus SQLite oder In-Memory
+        if self.sqlite_store:
+            # Daten aus SQLite-Datenbank holen
+            cursor = self.sqlite_store.conn.execute("SELECT teilenummer FROM records WHERE teilenummer IS NOT NULL AND teilenummer != ''")
+            for row in cursor:
+                tn = row[0]
+                if tn:
+                    # Zähle unter VIELEN verschiedenen Formaten für besseres Matching
+                    tn_upper = tn.upper().strip()
+                    tn_stripped = tn.lstrip('0') or tn
+                    varianten = [
+                        tn,
+                        tn_upper,
+                        tn_stripped,
+                        tn_stripped.upper(),
+                        tn.zfill(10),
+                        tn.zfill(13),
+                        tn.zfill(15),
+                    ]
+                    for key in set(varianten):  # set() vermeidet Duplikate
+                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + 1
+        elif self.data:
+            for record in self.data:
+                tn = record.get('teilenummer', '')
+                if tn:
+                    # Zähle unter VIELEN verschiedenen Formaten für besseres Matching
+                    tn_upper = tn.upper().strip()
+                    tn_stripped = tn.lstrip('0') or tn
+                    varianten = [
+                        tn,
+                        tn_upper,
+                        tn_stripped,
+                        tn_stripped.upper(),
+                        tn.zfill(10),
+                        tn.zfill(13),
+                        tn.zfill(15),
+                    ]
+                    for key in set(varianten):  # set() vermeidet Duplikate
+                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + 1
+        
+        # Filter-Werte holen
+        try:
+            min_wert = float(self.abbau_min_wert_var.get() or 0)
+        except ValueError:
+            min_wert = 0
+        try:
+            min_bestand = float(self.abbau_min_bestand_var.get() or 1)
+        except ValueError:
+            min_bestand = 1
+        try:
+            min_lagerdauer = float(self.abbau_min_lagerdauer_var.get() or 0)
+        except ValueError:
+            min_lagerdauer = 0
+        try:
+            max_verkaeufe = int(self.abbau_max_verkaeufe_var.get() or 5)
+        except ValueError:
+            max_verkaeufe = 5
+        
+        # Bezeichnung-Filter (kann mehrere Begriffe kommagetrennt enthalten)
+        bezeichnung_filter_text = self.abbau_bezeichnung_var.get().strip()
+        bezeichnung_filter_liste = []
+        if bezeichnung_filter_text:
+            # Entferne eventuelle Klammern mit Zahlen am Ende (z.B. "ÖLFILTER (123 Stk.)" -> "ÖLFILTER")
+            for p in bezeichnung_filter_text.split(','):
+                p = p.strip()
+                if '(' in p:
+                    p = p.split('(')[0].strip()
+                if p:
+                    bezeichnung_filter_liste.append(p.upper())
+        
+        # Such-Filter (sucht in Teilenummer UND Bezeichnung)
+        search_filter = self.abbau_search_var.get().strip().upper()
+        
+        # Finde Teile im Lager, die nie verkauft wurden
+        nie_verkauft = []
+        gesehen = set()  # Vermeiden von Duplikaten
+        
+        for key, eintrag in self.lagerbestand_data.items():
+            et_nr = eintrag.get('et_nr', '')
+            if et_nr in gesehen:
+                continue
+            gesehen.add(et_nr)
+            
+            bestand = eintrag.get('bestand', 0)
+            if bestand < min_bestand:
+                continue
+            
+            bez = eintrag.get('bezeichnung', '')
+            
+            # Bezeichnung-Filter anwenden
+            if bezeichnung_filter_liste:
+                bez_upper = bez.upper()
+                gefunden = False
+                for suchbegriff in bezeichnung_filter_liste:
+                    if suchbegriff in bez_upper:
+                        gefunden = True
+                        break
+                if not gefunden:
+                    continue
+            
+            # Such-Filter anwenden (Teilenummer ODER Bezeichnung)
+            if search_filter:
+                lieferant_nr = eintrag.get('lieferant_et_nr', '').upper()
+                if search_filter not in et_nr.upper() and search_filter not in lieferant_nr and search_filter not in bez.upper():
+                    continue
+            
+            # Ermittle Anzahl der Verkäufe - versuche verschiedene Formate
+            anzahl_verkaeufe = 0
+            lieferant_nr = eintrag.get('lieferant_et_nr', '')
+            
+            # Alle möglichen Schlüssel für dieses Teil
+            such_keys = [
+                et_nr,
+                et_nr.upper(),
+                et_nr.lstrip('0') or et_nr,
+                key,
+                key.upper() if isinstance(key, str) else key,
+                lieferant_nr,
+                lieferant_nr.upper() if lieferant_nr else '',
+                lieferant_nr.lstrip('0') if lieferant_nr else '',
+            ]
+            
+            for such_key in such_keys:
+                if such_key and such_key in verkaufs_zaehler:
+                    anzahl_verkaeufe = max(anzahl_verkaeufe, verkaufs_zaehler[such_key])
+            
+            # Filter nach Max. Verkäufe
+            if anzahl_verkaeufe > max_verkaeufe:
+                continue
+            
+            # Lagerwert berechnen
+            upe = eintrag.get('upe', 0)
+            lagerwert = bestand * upe
+            
+            if lagerwert < min_wert:
+                continue
+            
+            lagerdauer = eintrag.get('lagerdauer', 0)
+            if lagerdauer < min_lagerdauer:
+                continue
+            
+            nie_verkauft.append({
+                'teilenummer': et_nr,
+                'bezeichnung': eintrag.get('bezeichnung', ''),
+                'bestand': bestand,
+                'verkaeufe': anzahl_verkaeufe,
+                'upe': upe,
+                'lagerwert': lagerwert,
+                'lagerdauer': lagerdauer,
+                'lager': eintrag.get('lager', ''),
+            })
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # ZIEL-REICHWEITE UND ÜBERBESTAND BERECHNEN
+        # ═══════════════════════════════════════════════════════════════════
+        
+        # Hole Ziel-Reichweite aus Dropdown (Standard: 6 Monate)
+        ziel_reichweite_str = self.abbau_ziel_reichweite_var.get()
+        ziel_monate = int(ziel_reichweite_str.split()[0]) if ziel_reichweite_str else 6
+        
+        # Berechne Zeitraum in Monaten aus Verkaufsdaten
+        alle_daten_iso = []
+        if self.sqlite_store:
+            # Hole Datumsbereich aus SQLite
+            min_max = self.statistik.get_date_range()
+            if min_max[0] and min_max[1]:
+                alle_daten_iso = [min_max[0], min_max[1]]
+        elif self.data:
+            alle_daten_iso = [r.get('abgabe_iso', '') for r in self.data if r.get('abgabe_iso')]
+
+        if alle_daten_iso:
+            from datetime import datetime
+            erstes_datum = datetime.strptime(min(alle_daten_iso), '%Y-%m-%d')
+            letztes_datum = datetime.strptime(max(alle_daten_iso), '%Y-%m-%d')
+            gesamt_monate = max(1, ((letztes_datum.year - erstes_datum.year) * 12 +
+                                    letztes_datum.month - erstes_datum.month) + 1)
+        else:
+            gesamt_monate = 12  # Fallback wenn keine Verkaufsdaten
+        
+        # Für jedes Teil: Berechne Stk/Mon, Reichweite, Zielbestand, Abbau, Umschlag, Bestellpunkt und Aktion
+        import math
+        for item in nie_verkauft:
+            verkaeufe = item['verkaeufe']
+            bestand = item['bestand']
+
+            # Stück pro Monat (Monatsverbrauch)
+            stueck_pro_monat = verkaeufe / gesamt_monate if gesamt_monate > 0 else 0
+            item['stueck_mon'] = stueck_pro_monat
+
+            # Reichweite = Bestand / Ø_Monatsverbrauch
+            if stueck_pro_monat > 0:
+                reichweite = bestand / stueck_pro_monat
+                item['reichweite'] = reichweite
+                item['reichweite_str'] = f"{reichweite:.1f} Mon"
+            else:
+                item['reichweite'] = float('inf')  # Unendlich
+                item['reichweite_str'] = "∞" if bestand > 0 else "-"
+
+            # Zielbestand = AUFRUNDEN(Ø_Monatsverbrauch × ZielMonate)
+            zielbestand = math.ceil(stueck_pro_monat * ziel_monate)
+            item['zielbestand'] = zielbestand
+
+            # Abbau = MAX(0, Bestand - Zielbestand)
+            abbau = max(0, bestand - zielbestand)
+            item['abbau'] = abbau
+
+            # UMSCHLAGSHÄUFIGKEIT (Turnover Rate)
+            if bestand > 0 and gesamt_monate and gesamt_monate > 0:
+                jahresverkauf = (verkaeufe / gesamt_monate) * 12
+                umschlagshaeufigkeit = jahresverkauf / bestand
+                item['umschlag_str'] = f"{umschlagshaeufigkeit:.1f}x"
+            else:
+                item['umschlag_str'] = "-"
+
+            # BESTELLPUNKT-EMPFEHLUNG
+            if stueck_pro_monat > 0 and bestand > 0:
+                bestellpunkt = stueck_pro_monat * 2  # 2 Monate als Bestellpunkt
+                if bestand < bestellpunkt:
+                    item['bestellpunkt_status'] = "🔴"  # Unter Bestellpunkt - jetzt bestellen!
+                elif bestand < bestellpunkt * 1.2:
+                    item['bestellpunkt_status'] = "🟡"  # Nahe Bestellpunkt - bald bestellen
+                else:
+                    item['bestellpunkt_status'] = "🟢"  # Bestand OK
+            else:
+                item['bestellpunkt_status'] = "⚪"  # Kein Bestand/Bestellpunkt
+
+            # Aktion bestimmen (nach Excel-Formel)
+            if verkaeufe == 0 and bestand > 0:
+                item['aktion'] = "🔴 ABBAU: Sofort (0 Verkäufe)"
+                item['aktion_prio'] = 1
+            elif bestand == 0:
+                item['aktion'] = "✅ OK: kein Bestand"
+                item['aktion_prio'] = 5
+            elif verkaeufe < 3:
+                item['aktion'] = "🟡 Nicht nachbestellen"
+                item['aktion_prio'] = 3
+            elif abbau > 0:
+                item['aktion'] = f"🟠 ABBAU: {abbau:.0f} Stk reduzieren"
+                item['aktion_prio'] = 2
+            else:
+                item['aktion'] = "✅ OK: Bestand passt"
+                item['aktion_prio'] = 4
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # ABC-ANALYSE (nach Pareto-Prinzip basierend auf Lagerwert)
+        # ═══════════════════════════════════════════════════════════════════
+        # Sortiere nach Lagerwert (höchster zuerst) für ABC-Analyse
+        nie_verkauft_sortiert_umsatz = sorted(nie_verkauft, key=lambda x: x['lagerwert'], reverse=True)
+        gesamt_lagerwert_alle = sum(item['lagerwert'] for item in nie_verkauft)
+
+        kumulativ_lagerwert = 0
+        for i, item in enumerate(nie_verkauft_sortiert_umsatz):
+            kumulativ_lagerwert += item['lagerwert']
+            kumulativ_prozent_umsatz = (kumulativ_lagerwert / gesamt_lagerwert_alle * 100) if gesamt_lagerwert_alle > 0 else 0
+
+            # ABC-Klassifizierung nach Pareto
+            if kumulativ_prozent_umsatz <= 80:
+                item['abc'] = '🅰️'  # A-Teile: Top 20% machen 80% Lagerwert
+            elif kumulativ_prozent_umsatz <= 95:
+                item['abc'] = '🅱️'  # B-Teile: Nächste 30% machen 15% Lagerwert
+            else:
+                item['abc'] = '🅲️'  # C-Teile: Restliche 50% machen 5% Lagerwert
+
+        # Sortierung: Standardmäßig nach Aktion-Priorität, dann nach Lagerwert
+        if hasattr(self, '_abbau_sort_mode') and self._abbau_sort_mode == 'lagerdauer':
+            nie_verkauft.sort(key=lambda x: (-x.get('lagerdauer', 0), -x['lagerwert']))
+        elif hasattr(self, '_abbau_sort_mode') and self._abbau_sort_mode == 'lagerwert':
+            nie_verkauft.sort(key=lambda x: -x['lagerwert'])
+        else:
+            # Standard: Nach Aktion-Priorität, dann Lagerwert
+            nie_verkauft.sort(key=lambda x: (x.get('aktion_prio', 5), -x['lagerwert']))
+
+        # ═══════════════════════════════════════════════════════════════════
+        # STATISTIKEN BERECHNEN (für Zusammenfassung)
+        # ═══════════════════════════════════════════════════════════════════
+        gesamt_teile = len(nie_verkauft)
+
+        # Treffer-Info
+        self.abbau_stats_label.config(text=f"(Zeige {min(len(nie_verkauft), 500)} von {gesamt_teile})")
+        
+        # ═══════════════════════════════════════════════════════════════════
+        # TABELLE FÜLLEN mit Aktions-Empfehlung
+        # ═══════════════════════════════════════════════════════════════════
+        for item in nie_verkauft[:500]:  # Limit auf 500 für Performance
+            # Tag basierend auf Aktion-Priorität
+            aktion_prio = item.get('aktion_prio', 5)
+            
+            if aktion_prio == 1:
+                tag = 'abbau_sofort'
+                prio_symbol = '🔴'
+            elif aktion_prio == 2:
+                tag = 'abbau_reduzieren'
+                prio_symbol = '🟠'
+            elif aktion_prio == 3:
+                tag = 'nicht_nachbestellen'
+                prio_symbol = '🟡'
+            else:
+                tag = 'ok'
+                prio_symbol = '🟢'
+            
+            self.abbau_tree.insert('', 'end', values=(
+                prio_symbol,
+                item['teilenummer'],
+                item['bezeichnung'],
+                item.get('abc', '-'),
+                f"{item['bestand']:.0f}",
+                item.get('umschlag_str', '-'),
+                item.get('bestellpunkt_status', '⚪'),
+                f"{item['verkaeufe']}",
+                f"{item['stueck_mon']:.1f}",
+                item['reichweite_str'],
+                f"{item['zielbestand']}",
+                f"{item['abbau']:.0f}" if item['abbau'] > 0 else '-',
+                f"{item['lagerwert']:.0f}",
+                item['aktion'],
+            ), tags=(tag,))
+
+    def _init_produkt_liste(self):
+        """Initialisiert die Produktliste für Autocomplete nach dem Laden."""
         # Zähle Produkte nach Kategorie
         produkt_zaehler = {}
-        for record in self.data:
-            bez = record.get('bezeichnung', '').strip()
-            if bez:
-                erste_worte = bez.split()[0] if bez.split() else bez
-                key = erste_worte.upper()
-                produkt_zaehler[key] = produkt_zaehler.get(key, 0) + 1
-        
+
+        # Hole Daten aus SQLite oder In-Memory
+        if self.sqlite_store:
+            # Daten aus SQLite-Datenbank holen
+            cursor = self.sqlite_store.conn.execute("SELECT bezeichnung FROM records WHERE bezeichnung IS NOT NULL AND bezeichnung != ''")
+            for row in cursor:
+                bez = row[0].strip()
+                if bez:
+                    erste_worte = bez.split()[0] if bez.split() else bez
+                    key = erste_worte.upper()
+                    produkt_zaehler[key] = produkt_zaehler.get(key, 0) + 1
+        elif self.data:
+            for record in self.data:
+                bez = record.get('bezeichnung', '').strip()
+                if bez:
+                    erste_worte = bez.split()[0] if bez.split() else bez
+                    key = erste_worte.upper()
+                    produkt_zaehler[key] = produkt_zaehler.get(key, 0) + 1
+        else:
+            return
+
         # Erstelle Liste mit Anzahl in Klammern, sortiert nach Anzahl
-        self.alle_produkte_liste = [f"{name} ({count})" for name, count in 
+        self.alle_produkte_liste = [f"{name} ({count})" for name, count in
                                      sorted(produkt_zaehler.items(), key=lambda x: -x[1])]
-        
+
         # Setze die Werte in die Combobox
         if hasattr(self, 'lager_produkt_entry'):
             self.lager_produkt_entry['values'] = self.alle_produkte_liste
@@ -2024,13 +2994,6 @@ class AnalyseApp(tk.Tk):
                 else:
                     tag = 'nicht_lohnend'
                 
-                # Freq./Mon.: Verkaufsfrequenz pro aktivem Monat
-                anz_verkaufsmonate = item.get('anzahl_verkaufsmonate', 1)
-                if anz_verkaufsmonate and anz_verkaufsmonate > 0:
-                    freq_pro_mon = item['anzahl_verkäufe'] / anz_verkaufsmonate
-                else:
-                    freq_pro_mon = item['anzahl_verkäufe']
-                
                 # Stk./Mon.: Stückzahl (Menge) pro Monat (über alle Monate)
                 zeitraum_monate = item.get('zeitraum_monate', 1)
                 if zeitraum_monate and zeitraum_monate > 0:
@@ -2038,17 +3001,80 @@ class AnalyseApp(tk.Tk):
                 else:
                     stueck_pro_mon = item['gesamtmenge']
                 
+                # Lagerbestand-Daten holen (versuche verschiedene Formate)
+                teilenummer = item['teilenummer']
+                lager_info = self.lagerbestand_data.get(teilenummer, {})
+                
+                # Falls nicht gefunden, versuche ohne führende Nullen
+                if not lager_info:
+                    tn_stripped = teilenummer.lstrip('0') or teilenummer
+                    lager_info = self.lagerbestand_data.get(tn_stripped, {})
+                
+                # Falls immer noch nicht gefunden, versuche mit führenden Nullen (auf 13 Stellen)
+                if not lager_info:
+                    tn_padded = teilenummer.zfill(13)
+                    lager_info = self.lagerbestand_data.get(tn_padded, {})
+                
+                bestand = lager_info.get('bestand', 0) if lager_info else 0
+                
+                # Bestand und Reichweite berechnen
+                if self.lagerbestand_data:
+                    bestand_str = f"{bestand:.0f}" if bestand > 0 else "0"
+                    if stueck_pro_mon > 0 and bestand > 0:
+                        reichweite_monate = bestand / stueck_pro_mon
+                        reichweite_str = f"{reichweite_monate:.1f} Mon."
+                        # Prognose basierend auf Reichweite
+                        if reichweite_monate < 2:
+                            prognose = "🔴 Zu wenig"
+                        elif reichweite_monate <= 12:
+                            prognose = "✅ OK"
+                        else:
+                            prognose = "⚠️ Zu viel"
+                    elif stueck_pro_mon == 0 and bestand > 0:
+                        reichweite_str = "∞"
+                        prognose = "❌ Kein Abverk."
+                    else:
+                        reichweite_str = "-"
+                        prognose = "-" if bestand == 0 else "❌ Kein Abverk."
+                else:
+                    bestand_str = "-"
+                    reichweite_str = "-"
+                    prognose = "-"
+
+                # Umschlagshäufigkeit berechnen
+                if bestand > 0 and zeitraum_monate and zeitraum_monate > 0:
+                    jahresverkauf = (item['gesamtmenge'] / zeitraum_monate) * 12
+                    umschlagshaeufigkeit = jahresverkauf / bestand
+                    umschlag_str = f"{umschlagshaeufigkeit:.1f}x"
+                else:
+                    umschlag_str = "-"
+
+                # Bestellpunkt-Status
+                if stueck_pro_mon > 0 and bestand > 0:
+                    bestellpunkt = stueck_pro_mon * 2
+                    if bestand < bestellpunkt:
+                        bestellpunkt_status = "🔴"
+                    elif bestand < bestellpunkt * 1.2:
+                        bestellpunkt_status = "🟡"
+                    else:
+                        bestellpunkt_status = "🟢"
+                else:
+                    bestellpunkt_status = "⚪"
+
                 self.lager_tree.insert('', 'end', values=(
                     item['teilenummer'],
                     item['bezeichnung'],
+                    item.get('abc', '-'),
+                    bestand_str,
+                    umschlag_str,
+                    bestellpunkt_status,
+                    reichweite_str,
+                    prognose,
                     item['anzahl_verkäufe'],
-                    f"{freq_pro_mon:.1f}",
                     f"{stueck_pro_mon:.1f}",
                     item.get('anzahl_kunden', '-'),
                     item.get('lagerfaehig', '-'),
-                    f"{item['monatsdurchschnitt_menge']:.1f}",
                     f"{item['monatsdurchschnitt_umsatz']:.0f}",
-                    tage_str,
                     item.get('trend', '-'),
                     item['kategorie'],
                     item['empfehlung'],
@@ -2079,15 +3105,48 @@ class AnalyseApp(tk.Tk):
             with open(filepath, 'w', newline='', encoding='utf-8-sig') as handle:
                 writer = csv.writer(handle, delimiter=';')
                 writer.writerow([
-                    'Teilenummer', 'Bezeichnung', 'Ø Tage', 'Verkäufe', 'Kunden',
+                    'Teilenummer', 'Bezeichnung', 'ABC', 'Bestand', 'Umschlag/Jahr',
+                    'Bestellpunkt Status', 'Ø Tage', 'Verkäufe', 'Kunden',
                     'Ø Menge/Monat', 'Ø Umsatz/Monat (€)', 'Prognose 3 Monate',
                     'Trend', 'Saisonalität', 'Kategorie', 'Empfehlung'
                 ])
                 for item in analyse:
                     tage_str = f"{item['durchschnitt_tage']:.0f}" if item['durchschnitt_tage'] else ""
+
+                    # ABC-Klassifizierung
+                    abc = item.get('abc', '-')
+
+                    # Bestand
+                    bestand = item.get('bestand', 0)
+
+                    # Umschlagshäufigkeit berechnen
+                    if bestand > 0 and zeitraum_monate and zeitraum_monate > 0:
+                        jahresverkauf = (item['gesamtmenge'] / zeitraum_monate) * 12
+                        umschlagshaeufigkeit = jahresverkauf / bestand
+                        umschlag_str = f"{umschlagshaeufigkeit:.1f}x".replace('.', ',')
+                    else:
+                        umschlag_str = "-"
+
+                    # Bestellpunkt-Status berechnen
+                    stueck_pro_mon = item['monatsdurchschnitt_menge']
+                    if stueck_pro_mon > 0 and bestand > 0:
+                        bestellpunkt = stueck_pro_mon * 2  # 2 Monate als Bestellpunkt
+                        if bestand < bestellpunkt:
+                            bestellpunkt_status = "Rot - Jetzt bestellen"
+                        elif bestand < bestellpunkt * 1.2:
+                            bestellpunkt_status = "Gelb - Bald bestellen"
+                        else:
+                            bestellpunkt_status = "Grün - Bestand OK"
+                    else:
+                        bestellpunkt_status = "Keine Daten"
+
                     writer.writerow([
                         item['teilenummer'],
                         item['bezeichnung'],
+                        abc.replace('🅰️', 'A').replace('🅱️', 'B').replace('🅲️', 'C'),
+                        bestand,
+                        umschlag_str,
+                        bestellpunkt_status,
                         tage_str,
                         item['anzahl_verkäufe'],
                         item.get('anzahl_kunden', ''),
@@ -2099,7 +3158,7 @@ class AnalyseApp(tk.Tk):
                         item['kategorie'].replace('✅ ', '').replace('⚠️ ', '').replace('❌ ', ''),
                         item['empfehlung'],
                     ])
-            messagebox.showinfo('Export', f'Lagerhaltungs-Analyse gespeichert:\n{filepath}')
+            self._show_auto_close_info('Export', f'Lagerhaltungs-Analyse gespeichert:\n{filepath}')
         except Exception as exc:
             messagebox.showerror('Fehler', f'Export fehlgeschlagen:\n{exc}')
 
@@ -2262,7 +3321,7 @@ class AnalyseApp(tk.Tk):
         )
         if filepath:
             self.figure.savefig(filepath, dpi=150, bbox_inches='tight')
-            messagebox.showinfo('Gespeichert', filepath)
+            self._show_auto_close_info('Gespeichert', filepath)
 
     # --- Zusammenfassung --------------------------------------------------
     def _update_summary(self):
@@ -2316,7 +3375,7 @@ class AnalyseApp(tk.Tk):
                         f"{info.get('gesamtumsatz', 0.0):.2f}".replace('.', ','),
                         info.get('anzahl_kunden', 0),
                     ])
-            messagebox.showinfo('Export', f'Datei gespeichert: {filepath}')
+            self._show_auto_close_info('Export', f'Datei gespeichert: {filepath}')
         except Exception as exc:
             messagebox.showerror('Fehler', f'Export fehlgeschlagen:\n{exc}')
 
@@ -2326,6 +3385,14 @@ class AnalyseApp(tk.Tk):
 # -----------------------------------------------------------------------------
 def main():
     app = AnalyseApp()
+    
+    # Aufräumen beim Beenden
+    def on_closing():
+        if app.sqlite_store:
+            app.sqlite_store.close()
+        app.destroy()
+    
+    app.protocol("WM_DELETE_WINDOW", on_closing)
     app.mainloop()
 
 

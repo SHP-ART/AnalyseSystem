@@ -7,7 +7,11 @@ __pycache__/
 
 # PyInstaller
 build/
+dist/
 *.spec
+
+# Lager-Daten (lokal, nicht auf GitHub)
+Lager/
 
 # IDEs
 .vscode/
