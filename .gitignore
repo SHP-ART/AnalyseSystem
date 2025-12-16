@@ -22,3 +22,6 @@ Lager/
 # Temporäre Dateien
 *.log
 *.tmp
+
+# Claude Code
+.claude/
