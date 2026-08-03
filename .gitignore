@@ -23,5 +23,5 @@ Lager/
 *.log
 *.tmp
 
-# Claude Code
-.claude/
+# Firebase
+firebase-debug.log

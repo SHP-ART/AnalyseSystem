@@ -162,6 +162,81 @@ When working with data:
 - Dates are stored as both original string ('abgabe_datum') and ISO format ('abgabe_iso')
 - All monetary calculations use float values converted from German comma notation
 
+## Sprache & Kommunikation
+
+- Antworte immer auf Deutsch
+- 2 Leerzeichen Einrückung
+- Keine Emojis in Code
+- Bei Unsicherheit nachfragen, nicht raten
+
+## Coding-Konventionen
+
+- Single-File-Architektur: `teilenummer_analyse.py` (3400 Zeilen)
+- Klassen: PascalCase (`TeilenummerParser`, `AnalyseApp`)
+- Methoden: snake_case (`parse_file`, `_update_lagerhaltung`)
+- Private Methoden: mit Unterstrich-Prefix
+- Deutsche UI-Strings, dt. Datumsformate (DD.MM.YYYY), Semikolon-CSV
+- Matplotlib wird immer lazy geladen (erst bei Bedarf)
+
+## TDD-Regeln
+
+1. Zuerst Tests schreiben, die das gewünschte Verhalten beschreiben
+2. Tests laufen lassen → müssen rot sein (sonst ist der Test falsch)
+3. Minimalen Code schreiben um Tests grün zu machen
+4. Refactoren – Tests bleiben grün
+5. **Tests nicht ändern um Fehler zu verstecken oder einen Test zum Bestehen zu zwingen**
+   - Schlägt ein Test fehl → Code anpassen, nicht den Test
+   - Ausnahme: fachliche Anforderung hat sich bewusst geändert → Test transparent anpassen,
+     Änderung in `.claude/RETRO.md` begründen und Nutzer informieren
+
+## Fehler-Dokumentation
+
+Nicht jeden Fehler dokumentieren – nur was dauerhaft relevant ist. In `.claude/ERRORS.md` aufnehmen:
+- Wiederkehrende Fehler
+- Nicht offensichtliche Setup-Probleme
+- Produktionsrelevante Bugs
+- Schwer debuggbare Kopplungen
+
+Format siehe `.claude/ERRORS.md`.
+
+## Pflicht-Lesereihenfolge bei Sessionstart
+
+0. `AGENTS.md` (Projektstamm) → zentraler Einstiegspunkt
+1. `.claude/RETRO.md` → letzter bekannter Projektzustand, offene Punkte
+2. `CLAUDE.md` (Projektstamm) → kritische Regeln, Konventionen
+3. `.claude/PROJEKT.md` → Architektur, Komponenten, Datenmodell
+4. `.claude/ERRORS.md` → bekannte Fehler und deren Lösungen
+
+## Feature-Ledger-Pflicht
+
+Vor jeder Erweiterung/Refactor: `FEATURES.md` lesen und pruefen ob die
+Aenderung eine dort gelistete Funktion betrifft. Nach der Aenderung: per
+grep bestaetigen dass alle betroffenen gelisteten Funktionen noch existieren.
+Fehlt eine und war das nicht explizit Auftrag -> Nutzer fragen, nicht raten.
+Neue/geaenderte Funktionen in FEATURES.md eintragen (Format siehe Datei).
+
+## Session-Abschluss (Pflicht bei jeder bedeutenden Änderung)
+
+1. `.claude/RETRO.md` ergänzen (neueste Einträge zuerst)
+2. Projektstatus in `.claude/PROJEKT.md` aktualisieren
+3. `~/.claude/GLOBAL_LEARNINGS.md` prüfen und ergänzen
+
+## Kritische Regeln
+
+- Deutsche Sprache für alle UI-Strings und Exporte beibehalten
+- Semikolon als CSV-Trennzeichen (dt. Excel-Kompatibilität)
+- SQLite-Modus bei großen Dateien nicht brechen
+- Lazy-Loading von matplotlib beibehalten (Startzeit)
+- Bestehende Tabellen-Sortierung und Filter nicht entfernen
+
+## Bekannte Fallstricke & Kopplungen
+
+- Single-File: Änderungen an einer Klasse können unbeabsichtigt andere betreffen
+- DMS Loco-Soft Format: Erste Zeile MUSS Metadaten enthalten, sonst Parser-Fehler
+- dt. Zahlenformat: Komma als Dezimaltrenner muss immer konvertiert werden
+- Encoding: Lagerbestand-Dateien können Latin-1 oder UTF-8 sein (Auto-Erkennung)
+- Lagerabbau: Teilenummer-Matching mehrstufig (mit/ohne führende Nullen, Lieferant-ET-Nr.)
+
 ## Notes
 
 - No automated tests currently exist

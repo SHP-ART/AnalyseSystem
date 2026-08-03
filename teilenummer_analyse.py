@@ -649,19 +649,9 @@ class TeilenummerStatistik:
             gesamtmenge = sum(v['menge'] for v in verkäufe)
             gesamtumsatz = sum(v['umsatz'] for v in verkäufe)
             
-            # Berechne Monats-Durchschnitt
-            # Zeitspanne ermitteln
-            sorted_dates = sorted([v['datum'] for v in verkäufe])
-            if len(sorted_dates) >= 1:
-                d1 = datetime.strptime(sorted_dates[0], '%Y-%m-%d')
-                d2 = datetime.strptime(sorted_dates[-1], '%Y-%m-%d')
-                tage_gesamt = (d2 - d1).days
-                monate_gesamt = max(1, tage_gesamt / 30.44)  # Durchschnittliche Tage pro Monat
-                monatsdurchschnitt_menge = gesamtmenge / monate_gesamt
-                monatsdurchschnitt_umsatz = gesamtumsatz / monate_gesamt
-            else:
-                monatsdurchschnitt_menge = gesamtmenge
-                monatsdurchschnitt_umsatz = gesamtumsatz
+            # Monats-Durchschnitt über Gesamtzeitraum (nicht nur aktive Verkaufsperiode)
+            monatsdurchschnitt_menge = gesamtmenge / gesamt_zeitraum_monate
+            monatsdurchschnitt_umsatz = gesamtumsatz / gesamt_zeitraum_monate
             
             # 5. Kundenabhängigkeit
             unique_kunden = len({r.get('kd_name', '') for r in [rec for rec in dataset if rec['teilenummer'] == teilenummer]})
@@ -752,10 +742,12 @@ class TeilenummerStatistik:
         erste_hälfte_menge = sum(v['menge'] for v in sorted_verkäufe[:mid])
         zweite_hälfte_menge = sum(v['menge'] for v in sorted_verkäufe[mid:])
         
-        if zweite_hälfte_menge > erste_hälfte_menge * 1.2:
+        if erste_hälfte_menge == 0 and zweite_hälfte_menge > 0:
+            return "↗️ Neu"
+        elif erste_hälfte_menge > 0 and zweite_hälfte_menge > erste_hälfte_menge * 1.2:
             prozent = int(((zweite_hälfte_menge / erste_hälfte_menge) - 1) * 100)
             return f"↗️ +{prozent}%"
-        elif zweite_hälfte_menge < erste_hälfte_menge * 0.8:
+        elif erste_hälfte_menge > 0 and zweite_hälfte_menge < erste_hälfte_menge * 0.8:
             prozent = int((1 - (zweite_hälfte_menge / erste_hälfte_menge)) * 100)
             return f"↘️ -{prozent}%"
         else:
@@ -766,20 +758,31 @@ class TeilenummerStatistik:
         if len(verkäufe) < 6:
             return "k.A."
         
-        # Verkäufe nach Quartal gruppieren
-        quartal_verkäufe = defaultdict(float)
+        # Verkäufe nach (Jahr, Quartal) gruppieren, dann pro Quartalnummer mitteln
+        jahres_quartale = defaultdict(lambda: defaultdict(float))
         for v in verkäufe:
             datum = datetime.strptime(v['datum'], '%Y-%m-%d')
             quartal = (datum.month - 1) // 3 + 1
-            quartal_verkäufe[quartal] += v['menge']
-        
-        if len(quartal_verkäufe) < 2:
+            jahres_quartale[datum.year][quartal] += v['menge']
+
+        if not jahres_quartale:
             return "k.A."
-        
-        max_q = max(quartal_verkäufe, key=quartal_verkäufe.get)
-        max_menge = quartal_verkäufe[max_q]
-        avg_menge = sum(quartal_verkäufe.values()) / len(quartal_verkäufe)
-        
+
+        # Durchschnitt pro Quartalnummer über alle Jahre
+        quartal_werte = defaultdict(list)
+        for year, qs in jahres_quartale.items():
+            for q, menge in qs.items():
+                quartal_werte[q].append(menge)
+
+        quartal_avg = {q: sum(m) / len(m) for q, m in quartal_werte.items()}
+
+        if len(quartal_avg) < 2:
+            return "k.A."
+
+        max_q = max(quartal_avg, key=quartal_avg.get)
+        max_menge = quartal_avg[max_q]
+        avg_menge = sum(quartal_avg.values()) / len(quartal_avg)
+
         if max_menge > avg_menge * 1.5:
             return f"Q{max_q}"
         return "Gleichmäßig"
@@ -925,8 +928,10 @@ class TeilenummerStatistik:
             else:
                 lagerfaehig = "❌ Nein"
             
-            # 11. Prognose
-            prognose_3m = row[7] * 3 if row[7] else 0
+            # Monats-Durchschnitt über Gesamtzeitraum (korrigiert, statt nur aktive Verkaufsperiode)
+            monatsdurchschnitt_menge = row[3] / gesamt_zeitraum_monate if row[3] else 0
+            monatsdurchschnitt_umsatz = row[4] / gesamt_zeitraum_monate if row[4] else 0
+            prognose_3m = monatsdurchschnitt_menge * 3
             
             ergebnis.append({
                 'teilenummer': row[0],
@@ -935,8 +940,8 @@ class TeilenummerStatistik:
                 'durchschnitt_tage': avg_tage,
                 'gesamtmenge': row[3],
                 'gesamtumsatz': row[4],
-                'monatsdurchschnitt_menge': row[7],
-                'monatsdurchschnitt_umsatz': row[8],
+                'monatsdurchschnitt_menge': monatsdurchschnitt_menge,
+                'monatsdurchschnitt_umsatz': monatsdurchschnitt_umsatz,
                 'anzahl_kunden': anzahl_kunden,
                 'trend': trend,
                 'saisonalität': saisonalität,
@@ -2597,15 +2602,16 @@ class AnalyseApp(tk.Tk):
         for item in self.abbau_tree.get_children():
             self.abbau_tree.delete(item)
         
-        # Sammle alle verkauften Teilenummern MIT Anzahl der Verkäufe
-        verkaufs_zaehler = {}  # Zählt Anzahl der Verkäufe pro Teilenummer
+        # Sammle alle verkauften Teilenummern MIT Gesamtmenge (Stückzahl)
+        verkaufs_zaehler = {}  # Summiert verkaufte Menge pro Teilenummer
 
         # Hole Daten aus SQLite oder In-Memory
         if self.sqlite_store:
-            # Daten aus SQLite-Datenbank holen
-            cursor = self.sqlite_store.conn.execute("SELECT teilenummer FROM records WHERE teilenummer IS NOT NULL AND teilenummer != ''")
+            # Daten aus SQLite-Datenbank holen (SUM(menge) statt Zeilenanzahl)
+            cursor = self.sqlite_store.conn.execute("SELECT teilenummer, COALESCE(SUM(menge), 0) FROM records WHERE teilenummer IS NOT NULL AND teilenummer != '' GROUP BY teilenummer")
             for row in cursor:
                 tn = row[0]
+                menge_sum = row[1] or 0
                 if tn:
                     # Zähle unter VIELEN verschiedenen Formaten für besseres Matching
                     tn_upper = tn.upper().strip()
@@ -2620,7 +2626,7 @@ class AnalyseApp(tk.Tk):
                         tn.zfill(15),
                     ]
                     for key in set(varianten):  # set() vermeidet Duplikate
-                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + 1
+                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + menge_sum
         elif self.data:
             for record in self.data:
                 tn = record.get('teilenummer', '')
@@ -2637,9 +2643,10 @@ class AnalyseApp(tk.Tk):
                         tn.zfill(13),
                         tn.zfill(15),
                     ]
+                    menge = record.get('menge', 0)
                     for key in set(varianten):  # set() vermeidet Duplikate
-                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + 1
-        
+                        verkaufs_zaehler[key] = verkaufs_zaehler.get(key, 0) + menge
+
         # Filter-Werte holen
         try:
             min_wert = float(self.abbau_min_wert_var.get() or 0)
