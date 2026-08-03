@@ -19,6 +19,7 @@ from tkinter.scrolledtext import ScrolledText
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 # Matplotlib wird verzögert geladen
 matplotlib = None
@@ -381,7 +382,7 @@ class SQLiteDataStore:
 # Statistik
 # -----------------------------------------------------------------------------
 class TeilenummerStatistik:
-    def __init__(self, data=None, db_store: SQLiteDataStore | None = None):
+    def __init__(self, data=None, db_store: Optional[SQLiteDataStore] = None):
         self.data = data or []
         self.db_store = db_store
 
@@ -1089,7 +1090,7 @@ class AnalyseApp(tk.Tk):
         self.metadata = {}
         self.current_file = None
         self.filter_params = {'type': 'alle', 'value': None}
-        self.sqlite_store: SQLiteDataStore | None = None
+        self.sqlite_store: Optional[SQLiteDataStore] = None
         self.alle_produkte_liste = []  # Für Autocomplete
         self.lagerbestand_data = {}  # Lagerbestand: {teilenummer: {bestand, verfuegbar, upe, ...}}
 
@@ -1140,6 +1141,14 @@ class AnalyseApp(tk.Tk):
 
         ttk.Button(file_frame, text='📊 Verkaufsdaten...', command=self._open_file).grid(row=0, column=0, padx=(0, 5))
         ttk.Button(file_frame, text='📦 Lagerbestand...', command=self._open_lagerbestand_file).grid(row=0, column=1, padx=(0, 15))
+
+        # Hilfstexte für Loco-Soft Fundorte
+        hint_font = ('TkDefaultFont', 8)
+        hint_fg = '#888888'
+        ttk.Label(file_frame, text='LocoSoft: DMS > Statistik > Export als .txt',
+                  font=hint_font, foreground=hint_fg).grid(row=1, column=0, columnspan=2, sticky='w', padx=(5, 0))
+        ttk.Label(file_frame, text='LocoSoft: Lager > Bestand > ausgabe.txt',
+                  font=hint_font, foreground=hint_fg).grid(row=2, column=0, columnspan=2, sticky='w', padx=(5, 0))
 
         # Immer SQLite verwenden
         self.storage_var = tk.StringVar(value='sqlite')
