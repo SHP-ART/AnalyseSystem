@@ -46,30 +46,31 @@ Datenfluss:
 | sqlite3 | Standard-Lib | Temporäre DB für große Datenmengen |
 | PyInstaller | 6.17.0 | Windows/macOS EXE-Build |
 | Pillow | (optional) | Icon-Generierung |
+| GitHub Actions | `.github/workflows/build-windows.yml` | CI: baut Windows-EXE automatisch bei Release |
 
 ## Kernkomponenten
 
-### TeilenummerParser (`teilenummer_analyse.py:49`)
+### TeilenummerParser (`teilenummer_analyse.py:50`)
 - **Verantwortung**: DMS Loco-Soft Dateien einlesen (Streaming)
 - **Schnittstellen**: `parse_file()` mit progress_callback, record_callback
 - **Besonderheiten**: Metadaten aus 1. Zeile, dt. Datums-/Zahlenformate
 
-### SQLiteDataStore (`teilenummer_analyse.py:171`)
+### SQLiteDataStore (`teilenummer_analyse.py:172`)
 - **Verantwortung**: Temporäre SQLite-DB für große Datenmengen
 - **Schnittstellen**: insert_record, fetch_records, get_top_n, get_summary, get_monthly_data
 - **Besonderheiten**: Auto-Cleanup, indizierte Queries, WHERE-Klausel-Builder
 
-### TeilenummerStatistik (`teilenummer_analyse.py:383`)
+### TeilenummerStatistik (`teilenummer_analyse.py:384`)
 - **Verantwortung**: Statistische Analyse (abstrahiert Memory/SQLite)
 - **Schnittstellen**: get_top_n, get_lagerhaltung_analyse, get_summary, get_teilenummer_details
 - **Besonderheiten**: ABC-Klassifizierung (Pareto), Trendanalyse, Saisonalitätserkennung
 
-### AnalyseApp (`teilenummer_analyse.py:1074`)
+### AnalyseApp (`teilenummer_analyse.py:1080`)
 - **Verantwortung**: Tkinter GUI mit Tab-Notebook
 - **Schnittstellen**: Datei-Dialog, Export, Keyboard-Shortcuts (Ctrl+O/E/S)
 - **Besonderheiten**: Lazy Matplotlib, Autocomplete-Filter, Debounced Updates
 
-### TreeviewHeaderTooltip (`teilenummer_analyse.py:979`)
+### TreeviewHeaderTooltip (`teilenummer_analyse.py:985`)
 - **Verantwortung**: Tooltips für Tabellen-Spaltenüberschriften
 
 ## Abhängigkeiten & Kopplungen
@@ -124,12 +125,11 @@ Tab-getrennt, wird unter mehreren Keys gespeichert (ET-Nr., Lieferant-ET-Nr., mi
 
 ## Bekannte Grenzen & offene Punkte
 
-- Single-File-Architektur (3400 Zeilen) – müsste aufgeteilt werden
+- Single-File-Architektur (3416 Zeilen) – müsste aufgeteilt werden
 - Keine automatisierten Tests
 - Kein requirements.txt
 - Multi-Sort für Tabellen nicht implementiert
 - Lagerabbau-Limit auf 500 Einträge
-- `firebase-debug.log` im Repo (sollte bereinigt werden)
 
 ## Bekannte Fehler
 
@@ -138,6 +138,6 @@ Siehe `.claude/ERRORS.md`
 ## Projektstatus
 
 - **Phase**: Wartung
-- **Letzter Stand**: 2026-08-03 – 5 Berechnungsfehler in Lagerhaltung/Lagerabbau behoben (Monatsdurchschnitt, Trend, Saisonalität, SUM vs. Count)
+- **Letzter Stand**: 2026-08-06 – Projektdokumentation geprüft und nachgezogen (Zeilenreferenzen korrigiert, CI-Workflow und Python-3.9-Fix nachträglich dokumentiert)
 - **Nächster Schritt**: Tests einrichten (pytest), erste Tests für Parser/Statistik/Lagerberechnungen schreiben
 - **Blockiert durch**: nichts

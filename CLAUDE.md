@@ -34,6 +34,9 @@ Output: `dist\LagerPilot.exe` (~38-41 MB, standalone executable)
 
 Output: `dist/Teilenummer-Analyse` (standalone executable)
 
+### CI-Build (GitHub Actions)
+`.github/workflows/build-windows.yml` baut bei jedem veröffentlichten Release automatisch die Windows-EXE (`LagerPilot.exe`) und lädt sie an das Release an.
+
 ### Icon Generation
 ```bash
 python create_icon.py
@@ -63,20 +66,20 @@ python3 teilenummer_analyse.py
 
 ### Core Components
 
-**TeilenummerParser** (`teilenummer_analyse.py:49`)
+**TeilenummerParser** (`teilenummer_analyse.py:50`)
 - Parses DMS Loco-Soft semicolon-delimited text files
 - Streaming parser with progress callback support
 - Handles metadata extraction from first line (dealer number, billing period)
 - Parses dates in German format (DD.MM.YYYY or DD.MM.YY)
 - Converts monetary values (comma decimal separator to float)
 
-**SQLiteDataStore** (`teilenummer_analyse.py:171`)
+**SQLiteDataStore** (`teilenummer_analyse.py:172`)
 - Temporary SQLite database for large datasets (automatic mode selection)
 - Enables analysis of files too large to fit in memory
 - Created in temp directory, automatically cleaned up
 - Provides indexed queries for performance
 
-**TeilenummerStatistik** (`teilenummer_analyse.py:383`)
+**TeilenummerStatistik** (`teilenummer_analyse.py:384`)
 - Statistical analysis engine
 - Supports both in-memory (list) and SQLite-backed data
 - Provides filtering by date ranges (month, quarter, custom periods)
@@ -86,7 +89,7 @@ python3 teilenummer_analyse.py
   - Total quantities and revenue aggregations
   - Date range analysis
 
-**AnalyseApp** (`teilenummer_analyse.py:1031`)
+**AnalyseApp** (`teilenummer_analyse.py:1080`)
 - Main Tkinter GUI application
 - Tabbed interface:
   - **Top Teilenummern**: Sortable table of most-used parts
@@ -171,12 +174,13 @@ When working with data:
 
 ## Coding-Konventionen
 
-- Single-File-Architektur: `teilenummer_analyse.py` (3400 Zeilen)
+- Single-File-Architektur: `teilenummer_analyse.py` (3416 Zeilen)
 - Klassen: PascalCase (`TeilenummerParser`, `AnalyseApp`)
 - Methoden: snake_case (`parse_file`, `_update_lagerhaltung`)
 - Private Methoden: mit Unterstrich-Prefix
 - Deutsche UI-Strings, dt. Datumsformate (DD.MM.YYYY), Semikolon-CSV
 - Matplotlib wird immer lazy geladen (erst bei Bedarf)
+- Python-3.9-Kompatibilität: kein `X | None` in Type-Hints, stattdessen `Optional[X]` (Commit 9836621)
 
 ## TDD-Regeln
 

@@ -1,5 +1,32 @@
 # RETRO.md – Session-Protokoll
 
+## 2026-08-06 – Projektdokumentation geprüft und nachgezogen
+**Änderungen:**
+- Zeilenreferenzen in `CLAUDE.md`, `.claude/PROJEKT.md`, `FEATURES.md` an aktuellen Code angeglichen (50+ veraltete Referenzen, automatisiert per Skript)
+- `.claude/RETRO.md`: fehlende Einträge für Commits 9836621 und b90aede nachgetragen (siehe unten)
+- `.claude/PROJEKT.md`: GitHub-Actions-CI ergänzt, Projektstatus aktualisiert, offenen Punkt `firebase-debug.log` geschlossen (steht seit 2026-08-03 in `.gitignore`, ungetrackt)
+- `CLAUDE.md`: CI-Workflow und Python-3.9-Konvention dokumentiert
+- `FEATURES.md`: neue Funktionen nachgetragen (Lagerabbau-Autocomplete, Quick-Filter-Reset, Auto-Close-Info)
+- Obsidian-Vault: Projektnotiz `Projects/LagerPilot.md` aktualisiert, Log-Eintrag geschrieben
+**Tests:** Keine vorhanden – Teststruktur steht weiter aus
+**Fehler aufgetreten:** Nein
+**Offene Punkte:**
+- Keine automatisierten Tests – Teststruktur muss aufgebaut werden
+**Nächster Schritt:** Teststruktur aufbauen (pytest) und erste Tests für Parser/Statistik schreiben
+
+---
+
+## 2026-08-03 – Python-3.9-Kompatibilität + CI-Workflow (nachträglich dokumentiert)
+**Änderungen:**
+- Commit 9836621: `teilenummer_analyse.py` – `X | None` durch `Optional[X]` ersetzt (Python 3.9-Kompatibilität), Hilfstexte für Loco-Soft-Fundorte ergänzt
+- Commit b90aede: `.github/workflows/build-windows.yml` – GitHub Actions baut bei Release automatisch die Windows-EXE (`LagerPilot.exe`) und lädt sie ans Release
+**Tests:** Keine vorhanden
+**Fehler aufgetreten:** Nein
+**Offene Punkte:** Keine automatisierten Tests
+**Nächster Schritt:** Teststruktur aufbauen (pytest)
+
+---
+
 ## 2026-08-03 – Berechnungsfehler in Lagerhaltung/Lagerabbau behoben
 **Änderungen:**
 - `teilenummer_analyse.py`: 5 Berechnungsfehler behoben (3 kritisch, 2 mittel)
